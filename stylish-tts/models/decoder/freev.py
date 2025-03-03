@@ -151,7 +151,7 @@ config_h = Munch(
         "win_size": 1200,
         "sampling_rate": 24000,
         "fmin": 50,
-        "fmax": 550,
+        "fmax": 8000,
     }
 )
 

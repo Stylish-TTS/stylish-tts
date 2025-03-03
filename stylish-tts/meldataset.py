@@ -97,7 +97,7 @@ def preprocess(wave):
         hop_size=300,
         win_size=1200,
         fmin=50,
-        fmax=550,
+        fmax=8000,
     )
     mel_tensor = (torch.log(1e-5 + mel_tensor.unsqueeze(0)) - mean) / std
     return mel_tensor
