@@ -9,6 +9,7 @@ from accelerate.accelerator import Accelerator
 from text_utils import TextCleaner
 from torch.utils.data import DataLoader
 import logging
+from config_loader import DatasetConfig
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +17,9 @@ logger = logging.getLogger(__name__)
 class BatchManager:
     def __init__(
         self,
-        train_path: str,
+        dataset_config: DatasetConfig,
         log_dir: str,
         probe_batch_max: int = None,
-        root_path: str = "",
-        OOD_data: str = [],
-        min_length: int = 50,
         device: str = "cpu",
         accelerator: Optional["Accelerator"] = None,
         multispeaker: bool = False,
@@ -29,7 +27,7 @@ class BatchManager:
         stage: str = "",
         epoch: int = 1,
     ):
-        self.train_path: str = train_path
+        self.train_path: str = dataset_config.train_data
         self.probe_batch_max: int = probe_batch_max
         self.log_dir: str = log_dir
         self.device: str = device
@@ -44,12 +42,13 @@ class BatchManager:
             exit()
         self.dataset: FilePathDataset = FilePathDataset(
             train_list,
-            root_path,
-            OOD_data=OOD_data,
-            min_length=min_length,
+            dataset_config.wav_path,
+            OOD_data=dataset_config.OOD_data,
+            min_length=dataset_config.min_length,
             validation=False,
             multispeaker=multispeaker,
             text_cleaner=text_cleaner,
+            pitch_path=dataset_config.pitch_path,
         )
         self.time_bins: Dict[int, List[int]] = self.dataset.time_bins()
         self.process_count: int = 1
@@ -150,7 +149,7 @@ class BatchManager:
                         self.set_batch_size(key, batch_size)
                     done = True
                 except Exception as e:
-                    if "out of memory" in str(e):
+                    if "out of memory" in str(e) or "cufft" in str(e).lower():
                         audio_length = (last_bin * 0.25) + 0.25
                         train.logger.info(
                             f"TRAIN_BATCH OOM ({last_bin}) @ batch_size {batch_size}: audio_length {audio_length} total audio length {audio_length * batch_size}"
@@ -222,7 +221,7 @@ class BatchManager:
             except Exception as e:
                 batch_size = self.get_batch_size(self.last_bin)
                 audio_length = (self.last_bin * 0.25) + 0.25
-                if "CUDA out of memory" in str(e):
+                if "CUDA out of memory" in str(e) or "cufft" in str(e).lower():
                     train.logger.info(
                         f"{attempt * ('*' if attempt < max_attempts else 'X')} "
                         + f"TRAIN_BATCH OOM ({self.last_bin}) @ batch_size {batch_size}: audio_length {audio_length} total audio length {audio_length * batch_size} "

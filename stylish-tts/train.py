@@ -144,6 +144,7 @@ def main(config_path, model_config_path, out_dir, stage, checkpoint):
         validation=True,
         multispeaker=train.model_config.model.multispeaker,
         text_cleaner=text_cleaner,
+        pitch_path=train.config.dataset.pitch_path,
     )
     train.val_dataloader = build_dataloader(
         val_dataset,
@@ -158,12 +159,9 @@ def main(config_path, model_config_path, out_dir, stage, checkpoint):
     train.val_dataloader = train.accelerator.prepare(train.val_dataloader)
 
     train.batch_manager = BatchManager(
-        train.config.dataset.train_data,
+        train.config.dataset,
         train.out_dir,
         probe_batch_max=train.config.training.probe_batch_max,
-        root_path=train.config.dataset.wav_path,
-        OOD_data=train.config.dataset.OOD_data,
-        min_length=train.config.dataset.min_length,
         device=train.config.training.device,
         accelerator=train.accelerator,
         multispeaker=train.model_config.model.multispeaker,

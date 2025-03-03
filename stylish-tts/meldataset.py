@@ -136,13 +136,12 @@ class FilePathDataset(torch.utils.data.Dataset):
         min_length=50,
         multispeaker=False,
         text_cleaner=None,
+        pitch_path="",
     ):
 
         self.cache = {}
         self.pitch = {}
-        with safe_open(
-            "/mnt/z/stylish-dataset/pitch.safetensors", framework="pt", device="cpu"
-        ) as f:
+        with safe_open(pitch_path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 self.pitch[key] = f.get_tensor(key)
         _data_list = [l.strip().split("|") for l in data_list]

@@ -184,7 +184,7 @@ class BatchContext:
                 text_start += text_hop
                 text_end += text_hop
 
-    def pretrain_decoding(self, pitch, style, audio_gt):
+    def pretrain_decoding(self, pitch, style, audio_gt, probing=False):
         mels = self.to_mel(audio_gt)[:, :, :-1]
         return self.model.decoder(
             mels, pitch, None, style, pretrain=True, probing=probing

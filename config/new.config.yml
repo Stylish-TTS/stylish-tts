@@ -18,6 +18,7 @@ dataset:
   train_data: "your/train_list.txt"
   val_data: "your/val_list.txt"
   wav_path: "your/wav/dir"
+  pitch_path: "your/pitch/filename.safetensor"
   OOD_data: "Data/OOD_texts.txt"
   min_length: 50 # sample until texts with this size are obtained for OOD texts
 
@@ -29,6 +30,9 @@ loss_weight:
   s2s: 1 # sequence-to-sequence loss (1st stage, TMA)
   # TODO: What should the weight of this be?
   magphase: 1
+  amplitude: 1
+  phase: 1
+  stft_reconstruction: 1
   F0: 1 # F0 reconstruction loss (2nd stage)
   norm: 1 # norm reconstruction loss (2nd stage)
   duration: 1 # duration loss (2nd stage)
