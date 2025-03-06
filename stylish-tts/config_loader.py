@@ -259,35 +259,35 @@ class FreevDecoderConfig(BaseModel):
     """
 
     type: Literal["freev"] = "freev"
-    ASP_channel: int = Field(..., description="Amplitude channel dimension")
-    ASP_resblock_kernel_sizes: List[int] = Field(
-        ..., description="Amplitude residual block kernels"
-    )
-    ASP_resblock_dilation_sizes: List[List[int]] = Field(
-        ..., description="Amplitude residual block dilation sizes"
-    )
-    ASP_input_conv_kernel_size: int = Field(
-        ..., description="Amplitude input convolution kerenel size"
-    )
-    ASP_output_conv_kernel_size: int = Field(
-        ..., description="Amplitude output convolution kernel size"
-    )
-    PSP_channel: int = Field(..., description="Phase channel dimension")
-    PSP_resblock_kernel_sizes: List[int] = Field(
-        ..., description="Phase residual block kernels"
-    )
-    PSP_resblock_dilation_sizes: List[List[int]] = Field(
-        ..., description="Phase residual block dilation sizes"
-    )
-    PSP_input_conv_kernel_size: int = Field(
-        ..., description="Phase input convolution kerenel size"
-    )
-    PSP_output_R_conv_kernel_size: int = Field(
-        ..., description="Phase real output convolution kernel size"
-    )
-    PSP_output_I_conv_kernel_size: int = Field(
-        ..., description="Phase imaginary output convolution kernel size"
-    )
+    # ASP_channel: int = Field(..., description="Amplitude channel dimension")
+    # ASP_resblock_kernel_sizes: List[int] = Field(
+    #     ..., description="Amplitude residual block kernels"
+    # )
+    # ASP_resblock_dilation_sizes: List[List[int]] = Field(
+    #     ..., description="Amplitude residual block dilation sizes"
+    # )
+    # ASP_input_conv_kernel_size: int = Field(
+    #     ..., description="Amplitude input convolution kerenel size"
+    # )
+    # ASP_output_conv_kernel_size: int = Field(
+    #     ..., description="Amplitude output convolution kernel size"
+    # )
+    # PSP_channel: int = Field(..., description="Phase channel dimension")
+    # PSP_resblock_kernel_sizes: List[int] = Field(
+    #     ..., description="Phase residual block kernels"
+    # )
+    # PSP_resblock_dilation_sizes: List[List[int]] = Field(
+    #     ..., description="Phase residual block dilation sizes"
+    # )
+    # PSP_input_conv_kernel_size: int = Field(
+    #     ..., description="Phase input convolution kerenel size"
+    # )
+    # PSP_output_R_conv_kernel_size: int = Field(
+    #     ..., description="Phase real output convolution kernel size"
+    # )
+    # PSP_output_I_conv_kernel_size: int = Field(
+    #     ..., description="Phase imaginary output convolution kernel size"
+    # )
 
 
 class TextEncoderConfig(BaseModel):

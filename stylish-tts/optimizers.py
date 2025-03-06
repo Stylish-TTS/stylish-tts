@@ -168,7 +168,7 @@ def calculate_lr(key, train):
     )
     lr = train.config.optimizer.lr
     weight_decay = 1e-4
-    betas = (0.0, 0.99)
+    betas = (0.85, 0.99)
     if is_second:
         if key == "bert":
             lr = train.config.optimizer.bert_lr
