@@ -88,17 +88,17 @@ mean, std = -4, 4
 def preprocess(wave):
     # wave_tensor = torch.from_numpy(wave).float()
     wave_tensor = wave
-    mel_tensor = to_mel(wave_tensor)
-    # mel_tensor = mel_spectrogram(
-    #    y=wave_tensor,
-    #    n_fft=2048,
-    #    num_mels=80,
-    #    sampling_rate=24000,
-    #    hop_size=300,
-    #    win_size=1200,
-    #    fmin=50,
-    #    fmax=550,
-    # )
+    # mel_tensor = to_mel(wave_tensor)
+    mel_tensor = mel_spectrogram(
+        y=wave_tensor,
+        n_fft=2048,
+        num_mels=80,
+        sampling_rate=24000,
+        hop_size=300,
+        win_size=1200,
+        fmin=50,
+        fmax=8000,
+    )
     mel_tensor = (torch.log(1e-5 + mel_tensor.unsqueeze(0)) - mean) / std
     return mel_tensor
 
