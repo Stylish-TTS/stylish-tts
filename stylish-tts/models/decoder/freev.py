@@ -579,5 +579,9 @@ class Decoder(nn.Module):
             x = asr
         audio, logamp, phase, real, imaginary = self.generator(x)
         return DecoderPrediction(
-            audio=audio, log_amplitude=logamp, real=real, imaginary=imaginary
+            audio=audio,
+            log_amplitude=logamp,
+            phase=phase,
+            real=real,
+            imaginary=imaginary,
         )

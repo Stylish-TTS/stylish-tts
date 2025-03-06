@@ -200,7 +200,7 @@ def amp_phase_spectrum(y, n_fft, hop_size, win_size):
     return log_amplitude, phase, stft_spec.real, stft_spec.imag
 
 
-def freev_loss(log, batch, pred, begin, end, audio_gt_slice, train):
+def freev_loss(log, batch, pred, train):
     if pred.log_amplitude is not None:
         loss_amplitude = amplitude_loss(batch.log_amplitude, pred.log_amplitude)
 
@@ -208,7 +208,7 @@ def freev_loss(log, batch, pred, begin, end, audio_gt_slice, train):
             batch.phase,
             pred.phase,
             train.model_config.preprocess.n_fft,
-            phase.size()[-1],
+            pred.phase.shape[-1],
         )
         # Losses defined on phase spectra
         loss_phase = L_IP + L_GD + L_PTD
@@ -222,7 +222,7 @@ def freev_loss(log, batch, pred, begin, end, audio_gt_slice, train):
             pred.real, rea_g_final, pred.imaginary, imag_g_final
         )
         loss_real_part = F.l1_loss(batch.real, pred.real)
-        loss_imaginary_part = F.l1_loss(batch.imagineary, pred.imaginary)
+        loss_imaginary_part = F.l1_loss(batch.imaginary, pred.imaginary)
         loss_stft_reconstruction = loss_consistency + 2.25 * (
             loss_real_part + loss_imaginary_part
         )

@@ -57,8 +57,10 @@ def train_acoustic(batch, model, train) -> LossLog:
             )
 
         loss_s2s = 0
-        for pred, text, length in zip(state.s2s_pred, batch.text, batch.text_length):
-            loss_s2s += torch.nn.functional.cross_entropy(pred[:length], text[:length])
+        for durpred, text, length in zip(state.s2s_pred, batch.text, batch.text_length):
+            loss_s2s += torch.nn.functional.cross_entropy(
+                durpred[:length], text[:length]
+            )
         loss_s2s /= batch.text.size(0)
         log.add_loss("s2s", loss_s2s)
 
@@ -66,7 +68,7 @@ def train_acoustic(batch, model, train) -> LossLog:
             "mono", torch.nn.functional.l1_loss(*(state.duration_results)) * 10
         )
 
-        # freev_loss(log, batch, pred, begin, end, batch.audio_gt, train)
+        freev_loss(log, batch, pred, train)
         train.accelerator.backward(log.total())
         log.add_loss("discriminator", d_loss)
 
