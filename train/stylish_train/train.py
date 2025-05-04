@@ -240,6 +240,7 @@ def main(config_path, model_config_path, out_dir, stage, checkpoint, reset_stage
     while not done:
         train.logger.info(f"Training stage {train.manifest.stage}")
         train.manifest.best_loss = float("inf")  # best test loss
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
         if not train.stage.batch_sizes_exist():
             train.batch_manager.probe_loop(train)

@@ -209,7 +209,7 @@ def load_defaults(train, model):
         # model.pitch_extractor.load_state_dict(params)
 
         # Load pretrained PLBERT
-        if "bert" in model:
+        if train.model_config.use_plbert:
             params = safetensors.torch.load_file(
                 hf_hub_download(repo_id="stylish-tts/plbert", filename="plbert.safetensors")
             )

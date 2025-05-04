@@ -31,6 +31,7 @@ class BatchContext:
         self.pitch_prediction = None
         self.energy_prediction = None
         self.duration_prediction = None
+        self.use_plbert = train.model_config.use_plbert
 
     def text_encoding(self, texts: torch.Tensor, alignment: torch.Tensor):
         text_spread = texts.unsqueeze(1).float() @ alignment
@@ -262,7 +263,7 @@ class BatchContext:
         )
         style_embedding = self.acoustic_style_embedding(batch.mel, batch.mel_length)
         prosody_embedding = self.acoustic_prosody_embedding(batch.mel, batch.mel_length)
-        if "bert" in self.model:
+        if self.use_plbert:
             plbert_embedding = self.model.bert(
                 batch.text, attention_mask=(~self.text_mask).int()
             )
@@ -302,7 +303,7 @@ class BatchContext:
         )
         style_embedding = self.textual_style_embedding(batch.sentence_embedding)
         prosody_embedding = self.textual_prosody_embedding(batch.sentence_embedding)
-        if "bert" in self.model:
+        if self.use_plbert:
             plbert_embedding = self.model.bert(
                 batch.text, attention_mask=(~self.text_mask).int()
             )
@@ -340,7 +341,7 @@ class BatchContext:
             # use_random_choice=False,
         )
         prosody_embedding = self.acoustic_prosody_embedding(batch.mel, batch.mel_length)
-        if "bert" in self.model:
+        if self.use_plbert:
             plbert_embedding = self.model.bert(
                 batch.text, attention_mask=(~self.text_mask).int()
             )

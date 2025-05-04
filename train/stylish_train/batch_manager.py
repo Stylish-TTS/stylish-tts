@@ -139,6 +139,7 @@ class BatchManager:
 
                         train.stage.optimizer.zero_grad()
                         gc.collect()
+                        torch.cuda.synchronize()
                         torch.cuda.empty_cache()
                         if batch_size > 0:
                             batch_size -= 1
@@ -217,6 +218,7 @@ class BatchManager:
                         train.stage.set_batch_size(last_bin, batch_size)
                         train.stage.save_batch_sizes()
                     gc.collect()
+                    torch.cuda.synchronize()
                     torch.cuda.empty_cache()
                 else:
                     logger.error("".join(traceback.format_exception(e)))
