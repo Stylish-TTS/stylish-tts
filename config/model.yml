@@ -9,6 +9,7 @@ hop_length: 300
 style_dim: 128
 inter_dim: 512
 discriminators: ["msbd", "mstftd"]
+use_plbert: true # whether to use pl-bert or not
 
 text_aligner:
   hidden_dim: 256

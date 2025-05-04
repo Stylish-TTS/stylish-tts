@@ -465,6 +465,7 @@ class ModelConfig(BaseModel):
     # pitch_extractor: PitchExtractorConfig = Field(
     #     ..., description="Configuration for the pitch extractor component."
     # )
+    use_plbert: bool = Field(..., description="Whether to use PL-BERT or not.")
     plbert: PLBERTConfig = Field(..., description="Configuration for the PLBERT model.")
     decoder: Union[
         # HiFiGANDecoderConfig,
