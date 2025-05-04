@@ -177,7 +177,7 @@ class BatchContext:
             # use_random_choice=False,
         )
         energy = self.acoustic_energy(batch.mel)
-        style_embedding = self.acoustic_style_embedding(batch.mel, batch.mel_length)
+        style_embedding = self.acoustic_style_embedding(batch.mel)
         pitch = self.calculate_pitch(batch).detach()
         return self.model.decoder(
             text_encoding, pitch, energy, style_embedding, probing=probing
@@ -186,7 +186,7 @@ class BatchContext:
     def audio_reconstruction(self, batch):
         mel = batch.mel
         energy = self.acoustic_energy(batch.mel).detach()
-        style_embedding = self.acoustic_style_embedding(batch.mel, batch.mel_length)
+        style_embedding = self.acoustic_style_embedding(batch.mel)
         pitch = self.calculate_pitch(batch).detach()
         gt = batch.audio_gt
         # if mel.shape[2] > 200:
@@ -214,7 +214,7 @@ class BatchContext:
             # use_random_choice=True,
         )
         energy = self.acoustic_energy(batch.mel)
-        style_embedding = self.acoustic_style_embedding(batch.mel, batch.mel_length)
+        style_embedding = self.acoustic_style_embedding(batch.mel)
         pitch = self.calculate_pitch(batch).detach()
         prediction = self.decoding(
             text_encoding,
@@ -239,7 +239,7 @@ class BatchContext:
             # use_random_choice=use_random_mono,
         )
         energy = self.acoustic_energy(batch.mel)
-        style_embedding = self.acoustic_style_embedding(batch.mel, batch.mel_length)
+        style_embedding = self.acoustic_style_embedding(batch.mel)
         pitch = self.calculate_pitch(batch).detach()
         prediction = self.decoding_single(
             text_encoding,
@@ -261,8 +261,8 @@ class BatchContext:
             # apply_attention_mask=False,
             # use_random_choice=False,
         )
-        style_embedding = self.acoustic_style_embedding(batch.mel, batch.mel_length)
-        prosody_embedding = self.acoustic_prosody_embedding(batch.mel, batch.mel_length)
+        style_embedding = self.acoustic_style_embedding(batch.mel)
+        prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
         if self.use_plbert:
             plbert_embedding = self.model.bert(
                 batch.text, attention_mask=(~self.text_mask).int()
@@ -340,7 +340,7 @@ class BatchContext:
             # apply_attention_mask=False,
             # use_random_choice=False,
         )
-        prosody_embedding = self.acoustic_prosody_embedding(batch.mel, batch.mel_length)
+        prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
         if self.use_plbert:
             plbert_embedding = self.model.bert(
                 batch.text, attention_mask=(~self.text_mask).int()
