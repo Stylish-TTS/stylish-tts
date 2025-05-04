@@ -352,8 +352,8 @@ def train_sbert(batch, model, train, probing) -> Tuple[LossLog, Optional[torch.T
         textual_prosody_embedding = state.textual_prosody_embedding(
             batch.sentence_embedding
         )
-        acoustic_style_embedding = state.acoustic_style_embedding(batch.mel, batch.mel_length)
-        acoustic_prosody_embedding = state.acoustic_prosody_embedding(batch.mel, batch.mel_length)
+        acoustic_style_embedding = state.acoustic_style_embedding(batch.mel)
+        acoustic_prosody_embedding = state.acoustic_prosody_embedding(batch.mel)
 
         train.stage.optimizer.zero_grad()
         log = build_loss_log(train)
