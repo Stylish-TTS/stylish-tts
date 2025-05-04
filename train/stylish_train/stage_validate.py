@@ -163,8 +163,8 @@ def validate_sbert(batch, train):
     textual_prosody_embedding = state.textual_prosody_embedding(
         batch.sentence_embedding
     )
-    acoustic_style_embedding = state.acoustic_style_embedding(batch.mel)
-    acoustic_prosody_embedding = state.acoustic_prosody_embedding(batch.mel)
+    acoustic_style_embedding = state.acoustic_style_embedding(batch.mel, batch.mel_length)
+    acoustic_prosody_embedding = state.acoustic_prosody_embedding(batch.mel, batch.mel_length)
 
     log = build_loss_log(train)
 

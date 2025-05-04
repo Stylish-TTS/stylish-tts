@@ -339,7 +339,7 @@ class BatchContext:
             # apply_attention_mask=False,
             # use_random_choice=False,
         )
-        prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
+        prosody_embedding = self.acoustic_prosody_embedding(batch.mel, batch.mel_length)
         if "plbert" in self.model:
             plbert_embedding = self.model.bert(
                 batch.text, attention_mask=(~self.text_mask).int()
