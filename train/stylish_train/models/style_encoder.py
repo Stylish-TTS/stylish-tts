@@ -143,7 +143,7 @@ class StyleEncoder(torch.nn.Module):
 
         self.unshared = torch.nn.Linear(dim_out, style_dim)
 
-    def forward(self, x, mel_lengths):
+    def forward(self, x):
         h = self.shared(x)
         h = h.view(h.size(0), -1)
         s = self.unshared(h)

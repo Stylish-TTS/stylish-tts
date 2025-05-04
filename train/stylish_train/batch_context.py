@@ -86,11 +86,11 @@ class BatchContext:
         # return prediction * mask
         return prediction
 
-    def acoustic_style_embedding(self, mels: torch.Tensor, mel_lengths: torch.Tensor):
-        return self.model.acoustic_style_encoder(mels.unsqueeze(1), mel_lengths)
+    def acoustic_style_embedding(self, mels: torch.Tensor):
+        return self.model.acoustic_style_encoder(mels.unsqueeze(1))
 
-    def acoustic_prosody_embedding(self, mels: torch.Tensor, mel_lengths: torch.Tensor):
-        return self.model.acoustic_prosody_encoder(mels.unsqueeze(1), mel_lengths)
+    def acoustic_prosody_embedding(self, mels: torch.Tensor):
+        return self.model.acoustic_prosody_encoder(mels.unsqueeze(1))
 
     def textual_style_embedding(self, sentence_embedding: torch.Tensor):
         return self.model.textual_style_encoder(sentence_embedding)
