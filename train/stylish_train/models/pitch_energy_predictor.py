@@ -97,13 +97,13 @@ class PitchEnergyPredictor(torch.nn.Module):
         x = self.shared(prosody.transpose(-1, -2))
         x = self.prepare_projection(x)
         F0 = x.transpose(-1, -2)
-        # F0 = F.interpolate(F0, scale_factor=2, mode="nearest")
+        F0 = F.interpolate(F0, scale_factor=2, mode="nearest")
         for block in self.F0:
             F0 = block(F0, style)
         F0 = self.F0_proj(F0)
 
         N = x.transpose(-1, -2)
-        # N = F.interpolate(N, scale_factor=2, mode="nearest")
+        N = F.interpolate(N, scale_factor=2, mode="nearest")
         for block in self.N:
             N = block(N, style)
         N = self.N_proj(N)
