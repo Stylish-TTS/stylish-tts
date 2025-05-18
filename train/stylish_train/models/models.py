@@ -149,6 +149,11 @@ def build_model(model_config: ModelConfig, sbert_output_dim):
         mstftd=MultiScaleSTFTDiscriminator(),
     )
 
+    if not model_config.plbert.enabled:
+        channels = model_config.inter_dim
+        nets.prosody_lstm = nn.LSTM(
+            channels, channels // 2, 1, batch_first=True, bidirectional=True
+        )
     return nets  # , kdiffusion
 
 

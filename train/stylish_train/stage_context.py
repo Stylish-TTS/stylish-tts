@@ -98,6 +98,7 @@ stages = {
         train_fn=train_pre_textual,
         validate_fn=validate_textual,
         train_models=[
+            "prosody_lstm",
             "acoustic_prosody_encoder",
             "duration_predictor",
             "pitch_energy_predictor",
@@ -130,6 +131,7 @@ stages = {
         train_fn=train_textual,
         validate_fn=validate_textual,
         train_models=[
+            "prosody_lstm",
             "acoustic_prosody_encoder",
             "duration_predictor",
             "pitch_energy_predictor",

@@ -35,6 +35,20 @@ class BatchContext:
     def text_encoding(self, texts: torch.Tensor, text_lengths: torch.Tensor):
         return self.model.text_encoder(texts, text_lengths, self.text_mask)
 
+    def duration_encoding(self, texts, text_lengths):
+        if self.plbert_enabled:
+            plbert_embedding = self.model.bert(
+                texts, attention_mask=(~self.text_mask).int()
+            )
+            return self.model.bert_encoder(plbert_embedding).transpose(-1, -2)
+        else:
+            return self.model.text_encoder(
+                texts,
+                text_lengths,
+                self.text_mask,
+                external_lstm=self.model.prosody_lstm,
+            )
+
     def bert_encoding(self, texts: torch.Tensor):
         mask = (~self.text_mask).int()
         bert_encoding = self.model.bert(texts, attention_mask=mask)
@@ -119,15 +133,7 @@ class BatchContext:
         )
         style_embedding = self.acoustic_style_embedding(batch.mel)
         prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
-        if self.plbert_enabled:
-            plbert_embedding = self.model.bert(
-                batch.text, attention_mask=(~self.text_mask).int()
-            )
-            duration_encoding = self.model.bert_encoder(plbert_embedding).transpose(
-                -1, -2
-            )
-        else:
-            duration_encoding = text_encoding
+        duration_encoding = self.duration_encoding(batch.text, batch.text_lengths)
         self.duration_prediction, prosody = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,
@@ -155,15 +161,7 @@ class BatchContext:
         )
         style_embedding = self.textual_style_embedding(batch.sentence_embedding)
         prosody_embedding = self.textual_prosody_embedding(batch.sentence_embedding)
-        if self.plbert_enabled:
-            plbert_embedding = self.model.bert(
-                batch.text, attention_mask=(~self.text_mask).int()
-            )
-            duration_encoding = self.model.bert_encoder(plbert_embedding).transpose(
-                -1, -2
-            )
-        else:
-            duration_encoding = text_encoding
+        duration_encoding = self.duration_encoding(batch.text, batch.text_lengths)
         self.duration_prediction, prosody = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,
@@ -189,15 +187,7 @@ class BatchContext:
             batch,
         )
         prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
-        if self.plbert_enabled:
-            plbert_embedding = self.model.bert(
-                batch.text, attention_mask=(~self.text_mask).int()
-            )
-            duration_encoding = self.model.bert_encoder(plbert_embedding).transpose(
-                -1, -2
-            )
-        else:
-            duration_encoding = text_encoding
+        duration_encoding = self.duration_encoding(batch.text, batch.text_lengths)
         self.duration_prediction, prosody = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,

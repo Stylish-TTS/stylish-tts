@@ -220,6 +220,7 @@ class Stylish(nn.Module):
         pitch_energy_predictor,
         decoder,
         generator,
+        prosody_lstm=None,
         device="cuda",
         **kwargs
     ):
@@ -235,7 +236,10 @@ class Stylish(nn.Module):
             pitch_energy_predictor,
             decoder,
             generator,
+            prosody_lstm,
         ]:
+            if model is None:
+                continue
             model.to(device).eval()
             for p in model.parameters():
                 p.requires_grad = False
@@ -250,6 +254,15 @@ class Stylish(nn.Module):
         self.pitch_energy_predictor = pitch_energy_predictor
         self.decoder = decoder
         self.generator = generator
+        self.prosody_lstm = prosody_lstm
+        self.plbert_enabled = self.prosody_lstm is None
+
+    def duration_encoding(self, texts, text_mask):
+        if self.plbert_enabled:
+            plbert_embedding = self.model.bert(texts, attention_mask=(~text_mask).int())
+            return self.model.bert_encoder(plbert_embedding).transpose(-1, -2)
+        else:
+            return self.model.text_encoder.infer(texts, external_lstm=self.prosody_lstm)
 
     def decoding_single(
         self,
@@ -290,8 +303,7 @@ class Stylish(nn.Module):
         text_encoding = self.text_encoder.infer(texts)
         style_embedding = self.textual_style_encoder(sentence_embedding)
         prosody_embedding = self.textual_prosody_encoder(sentence_embedding)
-        plbert_embedding = self.bert(texts, attention_mask=(~text_mask).int())
-        duration_encoding = self.bert_encoder(plbert_embedding).permute(0, 2, 1)
+        duration_encoding = self.duration_encoding(texts, text_mask)
         duration_prediction, prosody = self.duration_predict(
             duration_encoding,
             prosody_embedding,
