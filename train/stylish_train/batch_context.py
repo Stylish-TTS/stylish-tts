@@ -92,8 +92,19 @@ class BatchContext:
     def textual_style_embedding(self, sentence_embedding: torch.Tensor):
         return self.model.textual_style_encoder(sentence_embedding)
 
-    def textual_prosody_embedding(self, sentence_embedding: torch.Tensor):
-        return self.model.textual_prosody_encoder(sentence_embedding)
+    """def textual_prosody_embedding(self, sentence_embedding: torch.Tensor):
+        return self.model.textual_prosody_encoder(sentence_embedding)"""
+
+    def textual_prosody_embedding(self, texts, text_lengths):
+        pitch_energy_encoding = self.model.text_encoder(
+            texts,
+            text_lengths,
+            self.text_mask,
+            external_lstm=self.model.prosody_style_lstm,
+        )
+        prosody_embedding = F.adaptive_avg_pool1d(pitch_energy_encoding, 1).squeeze(-1)
+        prosody_embedding = self.model.textual_prosody_encoder(prosody_embedding)
+        return prosody_embedding
 
     def decoding_single(
         self,
@@ -115,7 +126,7 @@ class BatchContext:
             batch,
         )
         energy = self.acoustic_energy(batch.mel)
-        style_embedding = self.acoustic_style_embedding(batch.mel)
+        style_embedding = self.textual_style_embedding(batch.sentence_embedding)
         pitch = self.calculate_pitch(batch).detach()
         prediction = self.decoding_single(
             text_encoding,
@@ -131,9 +142,12 @@ class BatchContext:
         duration = self.acoustic_duration(
             batch,
         )
-        style_embedding = self.acoustic_style_embedding(batch.mel)
-        prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
-        duration_encoding = self.duration_encoding(batch.text, batch.text_lengths)
+        style_embedding = self.textual_style_embedding(batch.sentence_embedding)
+        # prosody_embedding = self.textual_prosody_embedding(batch.sentence_embedding)
+        prosody_embedding = self.textual_prosody_embedding(
+            batch.text, batch.text_length
+        )
+        duration_encoding = self.duration_encoding(batch.text, batch.text_length)
         self.duration_prediction, prosody = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,
@@ -160,8 +174,11 @@ class BatchContext:
             batch,
         )
         style_embedding = self.textual_style_embedding(batch.sentence_embedding)
-        prosody_embedding = self.textual_prosody_embedding(batch.sentence_embedding)
-        duration_encoding = self.duration_encoding(batch.text, batch.text_lengths)
+        # prosody_embedding = self.textual_prosody_embedding(batch.sentence_embedding)
+        prosody_embedding = self.textual_prosody_embedding(
+            batch.text, batch.text_length
+        )
+        duration_encoding = self.duration_encoding(batch.text, batch.text_length)
         self.duration_prediction, prosody = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,
@@ -186,8 +203,10 @@ class BatchContext:
         _ = self.acoustic_duration(
             batch,
         )
-        prosody_embedding = self.acoustic_prosody_embedding(batch.mel)
-        duration_encoding = self.duration_encoding(batch.text, batch.text_lengths)
+        prosody_embedding = self.textual_prosody_embedding(
+            batch.text, batch.text_length
+        )
+        duration_encoding = self.duration_encoding(batch.text, batch.text_length)
         self.duration_prediction, prosody = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,
