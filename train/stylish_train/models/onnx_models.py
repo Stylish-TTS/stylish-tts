@@ -221,6 +221,7 @@ class Stylish(nn.Module):
         decoder,
         generator,
         prosody_lstm=None,
+        prosody_style_lstm=None,
         device="cuda",
         **kwargs
     ):
@@ -237,6 +238,7 @@ class Stylish(nn.Module):
             decoder,
             generator,
             prosody_lstm,
+            prosody_style_lstm,
         ]:
             if model is None:
                 continue
@@ -255,14 +257,25 @@ class Stylish(nn.Module):
         self.decoder = decoder
         self.generator = generator
         self.prosody_lstm = prosody_lstm
+        self.prosody_style_lstm = prosody_style_lstm
         self.plbert_enabled = self.prosody_lstm is None
+
+    def textual_prosody_embedding(self, texts):
+        assert not self.plbert_enabled, "WIP PR, default plbert is disabled"
+        pitch_energy_encoding = self.text_encoder.infer(
+            texts,
+            external_lstm=self.prosody_style_lstm,
+        )
+        prosody_embedding = F.adaptive_avg_pool1d(pitch_energy_encoding, 1).squeeze(-1)
+        prosody_embedding = self.textual_prosody_encoder(prosody_embedding)
+        return prosody_embedding
 
     def duration_encoding(self, texts, text_mask):
         if self.plbert_enabled:
-            plbert_embedding = self.model.bert(texts, attention_mask=(~text_mask).int())
-            return self.model.bert_encoder(plbert_embedding).transpose(-1, -2)
+            plbert_embedding = self.bert(texts, attention_mask=(~text_mask).int())
+            return self.bert_encoder(plbert_embedding).transpose(-1, -2)
         else:
-            return self.model.text_encoder.infer(texts, external_lstm=self.prosody_lstm)
+            return self.text_encoder.infer(texts, external_lstm=self.prosody_lstm)
 
     def decoding_single(
         self,
@@ -302,7 +315,7 @@ class Stylish(nn.Module):
     def forward(self, texts, text_mask, sentence_embedding):
         text_encoding = self.text_encoder.infer(texts)
         style_embedding = self.textual_style_encoder(sentence_embedding)
-        prosody_embedding = self.textual_prosody_encoder(sentence_embedding)
+        prosody_embedding = self.textual_prosody_embedding(texts)
         duration_encoding = self.duration_encoding(texts, text_mask)
         duration_prediction, prosody = self.duration_predict(
             duration_encoding,
