@@ -110,6 +110,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         iterator.clear()
         iterator.close()
         time_bins = {}
+        time_per_bin = {}
         logger.info(f"Total segment lengths: {total_audio_length / 3600.0:.2f}h")
         for i in range(len(sample_lengths)):
             phonemes = self.data_list[i][1]
@@ -130,11 +131,14 @@ class FilePathDataset(torch.utils.data.Dataset):
                 if bin_num not in time_bins:
                     time_bins[bin_num] = []
                 time_bins[bin_num].append(i)
+                if bin_num not in time_per_bin:
+                    time_per_bin[bin_num] = 0
+                time_per_bin[bin_num] += sample_lengths[i] / self.sample_rate
             else:
                 exit(
                     f"Segment Length Too Short. Must be at least 0.25 seconds: {self.data_list[i][0]}"
                 )
-        return time_bins
+        return time_bins, time_per_bin
 
     def __len__(self):
         return len(self.data_list)

@@ -150,7 +150,7 @@ def main(
         alignment_path=train.config.dataset.alignment_path,
         sbert=train.sbert,
     )
-    val_time_bins = val_dataset.time_bins()
+    val_time_bins, _ = val_dataset.time_bins()
     train.val_dataloader = build_dataloader(
         val_dataset,
         val_time_bins,
