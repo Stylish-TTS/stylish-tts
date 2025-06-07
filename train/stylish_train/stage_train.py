@@ -80,12 +80,12 @@ def train_textual(
         train.stage.optimizer.zero_grad()
         log = build_loss_log(train)
         train.stft_loss(pred.audio.squeeze(1), batch.audio_gt, log)
-        log.add_loss(
-            "generator",
-            train.generator_loss(
-                batch.audio_gt.detach().unsqueeze(1).float(), pred.audio, ["msbd"]
-            ).mean(),
-        )
+        # log.add_loss(
+        #     "generator",
+        #     train.generator_loss(
+        #         batch.audio_gt.detach().unsqueeze(1).float(), pred.audio, ["msbd"]
+        #     ).mean(),
+        # )
         log.add_loss(
             "slm",
             train.wavlm_loss(batch.audio_gt.detach(), pred.audio),

@@ -21,3 +21,7 @@ class FineStyleEncoder(torch.nn.Module):
         for block in self.blocks:
             x = block(x)
         return x
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        strict = False
+        return super().load_state_dict(state_dict, strict, assign)

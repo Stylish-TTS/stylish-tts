@@ -32,6 +32,9 @@ class BatchContext:
     def text_duration_encoding(self, texts: torch.Tensor, text_lengths: torch.Tensor):
         return self.model.text_duration_encoder(texts, text_lengths)
 
+    def text_pe_encoding(self, texts: torch.Tensor, text_lengths: torch.Tensor):
+        return self.model.text_pe_encoder(texts, text_lengths)
+
     def acoustic_energy(self, mels: torch.Tensor):
         with torch.no_grad():
             energy = log_norm(mels.unsqueeze(1)).squeeze(1)
@@ -47,6 +50,9 @@ class BatchContext:
 
     def textual_prosody_embedding(self, sentence_embedding: torch.Tensor):
         return self.model.textual_prosody_encoder(sentence_embedding)
+
+    def textual_pe_embedding(self, sentence_embedding: torch.Tensor):
+        return self.model.textual_pe_encoder(sentence_embedding)
 
     def decoding(
         self,
@@ -88,19 +94,24 @@ class BatchContext:
         duration_encoding, _, _ = self.text_duration_encoding(
             batch.text, batch.text_length
         )
+        pe_encoding, _, _ = self.text_pe_encoding(batch.text, batch.text_length)
         style_embedding = self.textual_style_embedding(text_encoding)
         prosody_embedding = self.textual_prosody_embedding(duration_encoding)
-        text_mask = length_to_mask(batch.text_length).to(self.config.training.device)
-        self.duration_prediction, prosody = self.model.duration_predictor(
+        pe_embedding = self.textual_pe_embedding(pe_encoding)
+        self.duration_prediction = self.model.duration_predictor(
             duration_encoding,
             prosody_embedding,
             batch.text_length,
-            batch.alignment,
-            text_mask,
         )
-        prosody_embedding = prosody_embedding @ batch.alignment
+        pe = self.model.pe_duration_encoder(
+            pe_encoding,
+            pe_embedding,
+            batch.text_length,
+        )
         self.pitch_prediction, self.energy_prediction = (
-            self.model.pitch_energy_predictor(prosody, prosody_embedding)
+            self.model.pitch_energy_predictor(
+                pe.transpose(-1, -2) @ batch.alignment, pe_embedding @ batch.alignment
+            )
         )
         pitch = self.calculate_pitch(batch, self.pitch_prediction)
         prediction = self.decoding(

@@ -105,12 +105,20 @@ class MultiOptimizer:
                 self.schedulers[key].step()
 
 
+class MercifulAdamW(AdamW):
+    def load_state_dict(self, state_dict):
+        try:
+            return super().load_state_dict(state_dict)
+        except:
+            pass
+
+
 def build_optimizer(stage_name: str, *, train):
     optim = {}
     schedulers = {}
     for key in train.model.keys():
         lr, weight_decay, betas = calculate_lr(key, stage_name, train=train)
-        optim[key] = AdamW(
+        optim[key] = MercifulAdamW(
             train.model[key].parameters(),
             lr=lr,
             weight_decay=weight_decay,
@@ -133,6 +141,8 @@ def build_optimizer(stage_name: str, *, train):
 
 def calculate_lr(key, stage_name, *, train):
     lr = train.config.training_plan.get_stage(stage_name).lr
+    if stage_name == "textual" and key in ["text_encoder", "textual_style_encoder"]:
+        lr = lr / 10
     weight_decay = 1e-4
     betas = (0.85, 0.99)
     return lr, weight_decay, betas

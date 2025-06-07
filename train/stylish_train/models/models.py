@@ -17,7 +17,7 @@ from .discriminators.multi_period import MultiPeriodDiscriminator
 from .discriminators.multi_resolution import MultiResolutionDiscriminator
 from .discriminators.multi_subband import MultiScaleSubbandCQTDiscriminator
 
-from .duration_predictor import DurationPredictor
+from .duration_predictor import DurationPredictor, DurationEncoder
 from .pitch_energy_predictor import PitchEnergyPredictor
 
 from .text_encoder import TextEncoder
@@ -93,6 +93,22 @@ def build_model(model_config: ModelConfig):
         d_hid=model_config.inter_dim,
         dropout=model_config.pitch_energy_predictor.dropout,
     )
+
+    text_pe_encoder = TextEncoder(
+        inter_dim=model_config.inter_dim, config=model_config.text_encoder
+    )
+    textual_pe_encoder = FineStyleEncoder(
+        model_config.inter_dim,
+        model_config.style_dim,
+        model_config.style_encoder.layers,
+    )
+    pe_duration_encoder = DurationEncoder(
+        sty_dim=model_config.style_dim,
+        d_model=model_config.inter_dim,
+        nlayers=model_config.duration_predictor.n_layer,
+        dropout=model_config.duration_predictor.dropout,
+    )
+
     nets = Munch(
         duration_predictor=duration_predictor,
         pitch_energy_predictor=pitch_energy_predictor,
@@ -106,6 +122,9 @@ def build_model(model_config: ModelConfig):
         mpd=MultiPeriodDiscriminator(),
         msbd=MultiScaleSubbandCQTDiscriminator(sample_rate=model_config.sample_rate),
         mrd=MultiResolutionDiscriminator(),
+        text_pe_encoder=text_pe_encoder,
+        textual_pe_encoder=textual_pe_encoder,
+        pe_duration_encoder=pe_duration_encoder,
     )
 
     return nets
