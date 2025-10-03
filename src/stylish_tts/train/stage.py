@@ -190,9 +190,10 @@ class Stage:
                             f"eval/attention_{index}", get_image(attention), steps
                         )
                     for inputs_index, samples_index in samples:
-                        mel_gt_np = None
+                        mel_gt_log_np = None
+                        mel_gt_normalized_np = None
                         mel_pred_log_np = None
-                        fig_mel_diff = None
+                        fig_mel_signed_diff = None
                         if (
                             audio_out is not None
                             and audio_out[inputs_index] is not None
@@ -238,13 +239,17 @@ class Stage:
                             )
                             if self.name != "duration":
                                 try:
-                                    mel_gt_np = (
-                                        train.to_mel(audio_gt[inputs_index])
-                                        .cpu()
-                                        .numpy()
+                                    audio_gt_tensor = audio_gt[inputs_index]
+                                    if audio_gt_tensor.dim() > 1:
+                                        audio_gt_tensor = audio_gt_tensor.squeeze(0)
+                                    audio_gt_tensor = audio_gt_tensor.float()
+                                    mel_gt_tensor = train.to_mel(audio_gt_tensor).cpu()
+                                    mel_gt_log = torch.log(
+                                        torch.clamp(mel_gt_tensor, min=1e-5)
                                     )
+                                    mel_gt_log_np = mel_gt_log.numpy()
                                     fig_mel_gt = plot_spectrogram_to_figure(
-                                        mel_gt_np, title="GT Mel"
+                                        mel_gt_log_np, title="GT Mel (log)"
                                     )
                                     train.writer.add_figure(
                                         f"eval/sample_{samples_index}/mel_gt",
@@ -252,12 +257,25 @@ class Stage:
                                         global_step=0,
                                     )
                                     plt.close(fig_mel_gt)
+                                    if (
+                                        hasattr(train, "normalization")
+                                        and train.normalization is not None
+                                    ):
+                                        dataset_mean = train.normalization.mel_log_mean
+                                        dataset_std = train.normalization.mel_log_std
+                                        if abs(dataset_std) > 1e-9:
+                                            mel_gt_normalized_np = (
+                                                mel_gt_log_np - dataset_mean
+                                            ) / dataset_std
                                 except Exception as e:
                                     train.logger.warning(
                                         f"Could not plot GT mel for sample index {samples_index}: {e}"
                                     )
                         # --- NEW: Plot Mel Difference ---
-                        if mel_gt_np is not None and mel_pred_log_np is not None:
+                        if (
+                            mel_gt_normalized_np is not None
+                            and mel_pred_log_np is not None
+                        ):
                             if self.name != "duration":
                                 try:
                                     # Use computed dataset normalization stats
@@ -265,7 +283,7 @@ class Stage:
                                     dataset_std = train.normalization.mel_log_std
 
                                     fig_mel_signed_diff = plot_mel_signed_difference_to_figure(
-                                        mel_gt_np,  # Already normalized log mel
+                                        mel_gt_normalized_np,
                                         mel_pred_log_np,  # Raw log mel
                                         dataset_mean,  # Pass normalization mean
                                         dataset_std,  # Pass normalization std
@@ -278,15 +296,18 @@ class Stage:
                                         fig_mel_signed_diff,
                                         global_step=steps,
                                     )
-                                    plt.close(fig_mel_diff)  # Explicitly close figure
+                                    plt.close(fig_mel_signed_diff)  # Explicitly close figure
                                 except Exception as e:
                                     train.logger.warning(
                                         f"Could not plot mel difference for sample index {samples_index}: {e}"
                                     )
-                                    if fig_mel_diff is not None and plt.fignum_exists(
-                                        fig_mel_diff.number
+                                    if (
+                                        fig_mel_signed_diff is not None
+                                        and plt.fignum_exists(
+                                            fig_mel_signed_diff.number
+                                        )
                                     ):
-                                        plt.close(fig_mel_diff)
+                                        plt.close(fig_mel_signed_diff)
                 if train.accelerator.is_main_process:
                     interim = combine_logs(logs)
                     if progress_bar is not None and interim is not None:
