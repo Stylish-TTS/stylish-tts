@@ -18,7 +18,6 @@ from stylish_tts.train.utils import (
     get_image,
     plot_spectrogram_to_figure,
     plot_mel_signed_difference_to_figure,
-    plot_residual_temporal_grid,
 )
 
 
@@ -374,14 +373,6 @@ class Stage:
                                         f"eval/sample_{samples_index}/mel_difference_normalized",
                                         fig_mel_signed_diff,
                                         global_step=steps,
-                                    )
-                                    min_len = min(
-                                        mel_gt_normalized_np.shape[1],
-                                        mel_pred_normalized_np.shape[1],
-                                    )
-                                    diff_matrix = (
-                                        mel_gt_normalized_np[:, :min_len]
-                                        - mel_pred_normalized_np[:, :min_len]
                                     )
                                     plt.close(fig_mel_signed_diff)  # Explicitly close figure
                                 except Exception as e:

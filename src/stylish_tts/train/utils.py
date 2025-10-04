@@ -330,9 +330,11 @@ def plot_mel_signed_difference_to_figure(
         ax_freq = fig.add_subplot(gs[0, 0], sharey=ax_main)
         cax = fig.add_subplot(gs[0, 2])
         ax_time = fig.add_subplot(gs[1, 1], sharex=ax_main)
+        ax_freq_stats = fig.add_subplot(gs[1, 0])
+        ax_frame_stats = fig.add_subplot(gs[1, 2])
     else:
         fig, ax_main = plt.subplots(figsize=figsize, dpi=dpi)
-        ax_time = ax_freq = cax = None
+        ax_time = ax_freq = cax = ax_freq_stats = ax_frame_stats = None
 
     im = ax_main.imshow(
         diff,
@@ -410,7 +412,7 @@ def plot_mel_signed_difference_to_figure(
             ax_time.fill_between(frame_axis, 0, per_frame_pos, color="#d62728", alpha=0.15)
             ax_time.fill_between(frame_axis, 0, per_frame_neg, color="#1f77b4", alpha=0.15)
         ax_time.axhline(0, color="black", linewidth=0.6, alpha=0.6)
-        ax_time.set_ylim(-1.0, 1.0)
+        ax_time.set_ylim(-0.25, 0.25)
         ax_time.set_title("Mean diff per frame")
         ax_time.set_xlabel("Frame")
         ax_time.set_ylabel("Mean diff")
@@ -424,12 +426,58 @@ def plot_mel_signed_difference_to_figure(
             ax_freq.fill_betweenx(mel_axis, 0, per_mel_pos, color="#d62728", alpha=0.15)
             ax_freq.fill_betweenx(mel_axis, 0, per_mel_neg, color="#1f77b4", alpha=0.15)
         ax_freq.axvline(0, color="black", linewidth=0.6, alpha=0.6)
-        ax_freq.set_xlim(-1.0, 1.0)
+        ax_freq.set_xlim(-0.25, 0.25)
         ax_freq.set_title("Mean diff per mel")
         ax_freq.set_ylabel("Mel bin")
         ax_freq.set_xlabel("Mean diff")
         if per_mel_abs.size:
             ax_freq.legend(loc="lower right", fontsize="small")
+
+        if ax_freq_stats is not None:
+            ax_freq_stats.axis("off")
+            mel_pos_avg = float(per_mel_pos.mean()) if per_mel_pos.size else 0.0
+            mel_neg_avg = float(per_mel_neg.mean()) if per_mel_neg.size else 0.0
+            ax_freq_stats.text(
+                0.03,
+                0.65,
+                f"avg: {mel_pos_avg:+.3f}",
+                fontsize=10,
+                color="#d62728",
+                transform=ax_freq_stats.transAxes,
+                ha="left",
+            )
+            ax_freq_stats.text(
+                0.03,
+                0.25,
+                f"avg: {mel_neg_avg:+.3f}",
+                fontsize=10,
+                color="#1f77b4",
+                transform=ax_freq_stats.transAxes,
+                ha="left",
+            )
+
+        if ax_frame_stats is not None:
+            ax_frame_stats.axis("off")
+            frame_pos_avg = float(per_frame_pos.mean()) if per_frame_pos.size else 0.0
+            frame_neg_avg = float(per_frame_neg.mean()) if per_frame_neg.size else 0.0
+            ax_frame_stats.text(
+                0.03,
+                0.65,
+                f"avg: {frame_pos_avg:+.3f}",
+                fontsize=10,
+                color="#d62728",
+                transform=ax_frame_stats.transAxes,
+                ha="left",
+            )
+            ax_frame_stats.text(
+                0.03,
+                0.25,
+                f"avg: {frame_neg_avg:+.3f}",
+                fontsize=10,
+                color="#1f77b4",
+                transform=ax_frame_stats.transAxes,
+                ha="left",
+            )
 
     stats = summarize_residual(diff)
     stats["vmax"] = float(vmax_used)
