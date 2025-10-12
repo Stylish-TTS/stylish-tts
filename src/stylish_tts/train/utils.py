@@ -493,8 +493,8 @@ class DurationProcessor(torch.nn.Module):
         #     alignment = alignment + coefficient * (x * (2 / (duration.unsqueeze(2) + 6))) ** power
 
         # duration = torch.nn.functional.pad(duration, (1, 1))
-        lower_bound -= 2
-        upper_bound += 2
+        lower_bound -= 3
+        upper_bound += 3
         mask = (sequence > lower_bound.unsqueeze(2)) * (
             sequence < upper_bound.unsqueeze(2)
         )

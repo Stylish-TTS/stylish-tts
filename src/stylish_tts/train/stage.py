@@ -129,7 +129,10 @@ class Stage:
                 index=disc_index,
             )
             train.accelerator.backward(d_loss * math.sqrt(batch.text.shape[0]))
-            disc_list = [f"mrd{disc_index}"]
+            if "pitch_disc" in config.discriminators:
+                disc_list = ["pitch_disc"]
+            else:
+                disc_list = [f"mrd{disc_index}"]
             optimizer_step(self.optimizer, disc_list)  # config.discriminators)
             train.stage.optimizer.zero_grad()
             result.add_loss("discriminator", d_loss)

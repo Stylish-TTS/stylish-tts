@@ -156,6 +156,17 @@ class AcousticStep:
             ),
         )
 
+    def pitch_generator_loss(self):
+        self.log.add_loss(
+            "generator",
+            self.train.generator_loss(
+                target_list=[self.pitch],
+                pred_list=[self.pred_pitch],
+                used=["pitch_disc"],
+                index=0,
+            ).mean(),
+        )
+
     def generator_loss(self, disc_index):
         self.log.add_loss(
             "generator",
@@ -361,21 +372,25 @@ def train_textual(
         train,
         log,
         use_predicted_pe=True,
+        # use_textual_style=True,
         use_textual_style=False,
-        predict_audio=True,
+        # predict_audio=True,
+        predict_audio=False,
     )
     train.stage.optimizer.zero_grad()
 
-    step.mel_loss()
-    step.multi_phase_loss()
-    step.generator_loss(disc_index)
-    step.magphase_loss()
+    # step.mel_loss()
+    # step.multi_phase_loss()
+    # step.generator_loss(disc_index)
+    # step.magphase_loss()
+    step.pitch_generator_loss()
     step.pitch_loss()
     step.voiced_loss()
     step.energy_loss()
 
     train.accelerator.backward(log.backwards_loss())
-    return log.detach(), detach_all(step.target_fft), detach_all(step.pred_fft)
+    return log.detach(), detach_all([step.pitch]), detach_all([step.pred_pitch])
+    # detach_all(step.target_fft), detach_all(step.pred_fft)
 
 
 @torch.no_grad()
@@ -388,6 +403,7 @@ def validate_textual(batch, train):
         log,
         use_predicted_pe=True,
         use_textual_style=False,
+        # use_textual_style=True,
         predict_audio=True,
     )
     train.stage.optimizer.zero_grad()
@@ -409,10 +425,11 @@ stages["textual"] = StageType(
         "pitch_energy_predictor",
         "pe_text_encoder",
         "pe_mel_style_encoder",
+        # "pe_text_style_encoder",
     ],
     eval_models=["speech_predictor"],
     # discriminators=[],
-    discriminators=["mrd0", "mrd1", "mrd2"],
+    discriminators=["pitch_disc"],
     inputs=[
         "text",
         "text_length",
@@ -445,9 +462,9 @@ def train_style(
         "style",
         torch.nn.functional.smooth_l1_loss(step.pe_style, pe_mel_style) * 10,
     )
-    step.pitch_loss()
-    step.voiced_loss()
-    step.energy_loss()
+    # step.pitch_loss()
+    # step.voiced_loss()
+    # step.energy_loss()
 
     train.accelerator.backward(log.backwards_loss())
     return log.detach(), None, None

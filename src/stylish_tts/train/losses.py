@@ -156,26 +156,33 @@ class MagPhaseLoss(torch.nn.Module):
 
 
 class DiscriminatorLoss(torch.nn.Module):
-    def __init__(self, *, mrd0, mrd1, mrd2):
+    def __init__(self, *, mrd0, mrd1, mrd2, pitch):
         super(DiscriminatorLoss, self).__init__()
         self.discriminators = torch.nn.ModuleDict(
             {
                 "mrd0": DiscriminatorLossHelper(mrd0, 1),  # multi_spectrogram_count),
                 "mrd1": DiscriminatorLossHelper(mrd1, 1),  # multi_spectrogram_count),
                 "mrd2": DiscriminatorLossHelper(mrd2, 1),  # multi_spectrogram_count),
+                "pitch_disc": DiscriminatorLossHelper(pitch, 1),
             }
         )
         self.disc_list = [
             self.discriminators["mrd0"],
             self.discriminators["mrd1"],
             self.discriminators["mrd2"],
+            self.discriminators["pitch_disc"],
         ]
 
     def get_disc_lr_multiplier(self, key):
         return self.discriminators[key].get_disc_lr_multiplier()
 
     def forward(self, *, target_list, pred_list, used, index):
-        loss = self.disc_list[index](target=target_list[index], pred=pred_list[index])
+        if "pitch_disc" in used:
+            loss = self.disc_list[-1](target=target_list[0], pred=pred_list[0])
+        else:
+            loss = self.disc_list[index](
+                target=target_list[index], pred=pred_list[index]
+            )
         # loss = 0
         # for key in used:
         #     loss += self.discriminators[key](
@@ -266,23 +273,30 @@ class DiscriminatorLossHelper(torch.nn.Module):
 
 
 class GeneratorLoss(torch.nn.Module):
-    def __init__(self, *, mrd0, mrd1, mrd2):
+    def __init__(self, *, mrd0, mrd1, mrd2, pitch):
         super(GeneratorLoss, self).__init__()
         self.generators = torch.nn.ModuleDict(
             {
                 "mrd0": GeneratorLossHelper(mrd0),
                 "mrd1": GeneratorLossHelper(mrd1),
                 "mrd2": GeneratorLossHelper(mrd2),
+                "pitch_disc": GeneratorLossHelper(pitch),
             }
         )
         self.gen_list = [
             self.generators["mrd0"],
             self.generators["mrd1"],
             self.generators["mrd2"],
+            self.generators["pitch_disc"],
         ]
 
     def forward(self, *, target_list, pred_list, used, index):
-        loss = self.gen_list[index](target=target_list[index], pred=pred_list[index])
+        if "pitch_disc" in used:
+            loss = self.gen_list[-1](target=target_list[0], pred=pred_list[0])
+        else:
+            loss = self.gen_list[index](
+                target=target_list[index], pred=pred_list[index]
+            )
         # loss = 0
         # for key in used:
         #     loss += self.generators[key](target_list=target_list, pred_list=pred_list)

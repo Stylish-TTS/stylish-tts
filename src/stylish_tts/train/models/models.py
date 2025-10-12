@@ -13,6 +13,7 @@ from .text_style_encoder import TextStyleEncoder
 from .mel_style_encoder import MelStyleEncoder
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .speech_predictor import SpeechPredictor
+from .pitch_discriminator import PitchDiscriminator
 from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
 
 from munch import Munch
@@ -72,6 +73,7 @@ def build_model(model_config: ModelConfig):
         pe_text_encoder=pe_text_encoder,
         pe_text_style_encoder=pe_text_style_encoder,
         pe_mel_style_encoder=pe_mel_style_encoder,
+        pitch_disc=PitchDiscriminator(),
     )
 
     return nets
