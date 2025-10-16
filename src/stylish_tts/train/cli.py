@@ -323,6 +323,7 @@ def convert(config_path, model_config_path, speech, checkpoint):
 )
 def voicepack(config_path, model_config_path, voicepack, checkpoint):
     from pathlib import Path
+    from sentence_transformers import SentenceTransformer
     import torch
     import torchaudio
     import tqdm
@@ -339,6 +340,7 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
     state = Checkpoint(checkpoint, config, model_config)
     if state.norm.frames <= 0:
         exit("No normalization state found. Cannot generate voicepack.")
+    sbert = SentenceTransformer("stsb-mpnet-base-v2")
 
     to_mel = torchaudio.transforms.MelSpectrogram(
         n_mels=model_config.n_mels,
@@ -350,6 +352,18 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
     text_cleaner = TextCleaner(model_config.symbol)
 
     datalist = get_data_path_list(Path(config.dataset.path) / config.dataset.train_data)
+
+    paths = []
+    plaintexts = []
+    for line in datalist:
+        fields = line.strip().split("|")
+        paths.append(fields[0])
+        plaintexts.append(fields[3])
+    sbert_embeddings = sbert.encode(plaintexts)
+
+    path_to_embedding = {}
+    for i in range(len(paths)):
+        path_to_embedding[paths[i]] = sbert_embeddings[i]
 
     dataset = FilePathDataset(
         data_list=datalist,
@@ -366,7 +380,7 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
         dataset,
         time_bins,
         validation=True,
-        num_workers=config.training.data_workers,
+        num_workers=0,
         device=config.training.device,
         multispeaker=model_config.multispeaker,
         stage="voicepack",
@@ -387,9 +401,11 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
     state.model.speech_style_encoder.eval()
     state.model.pe_style_encoder.eval()
     state.model.duration_style_encoder.eval()
-    styles = [[] for _ in range(512)]
+    styles = []
+    # styles = [[] for _ in range(512)]
     for _, batch in iterator:
         with torch.no_grad():
+            path = batch[3][0]
             wave = batch[0].to(device)
             length = batch[2][0].to(device)
             mel, _ = calculate_mel(
@@ -399,30 +415,33 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
             pe_style = state.model.pe_style_encoder(mel.unsqueeze(1))
             duration_style = state.model.duration_style_encoder(mel.unsqueeze(1))
 
+            embedding = torch.from_numpy(path_to_embedding[path]).to(device)
             combined = torch.cat(
                 [
                     speech_style.squeeze(0),
                     pe_style.squeeze(0),
                     duration_style.squeeze(0),
+                    embedding,
                 ],
                 dim=0,
             )
-            styles[length.item() - 1].append(combined)
+            styles.append(combined)
+            # styles[length.item() - 1].append(combined)
 
-    result = []
-    for i in range(512):
-        lower = i
-        upper = i + 1
-        while total_len(styles[lower:upper]) < 100:
-            lower -= 1
-            upper += 1
-            if lower < 0 and upper > 512:
-                exit("Need at least 100 styles to make a voicepack")
-        flattened = sum(styles[lower:upper], [])
-        average = torch.stack(flattened, dim=0).mean(dim=0)
-        result.append(average)
-    result = torch.stack(result, dim=0)
-    save_file({"basic_voicepack": result}, voicepack)
+    # result = []
+    # for i in range(512):
+    #     lower = i
+    #     upper = i + 1
+    #     while total_len(styles[lower:upper]) < 100:
+    #         lower -= 1
+    #         upper += 1
+    #         if lower < 0 and upper > 512:
+    #             exit("Need at least 100 styles to make a voicepack")
+    #     flattened = sum(styles[lower:upper], [])
+    #     average = torch.stack(flattened, dim=0).mean(dim=0)
+    #     result.append(average)
+    result = torch.stack(styles, dim=0)
+    save_file({"voicepack": result}, voicepack)
 
 
 def total_len(listlist):

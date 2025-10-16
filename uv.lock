@@ -2639,6 +2639,25 @@ wheels = [
 ]
 
 [[package]]
+name = "sentence-transformers"
+version = "5.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "pillow" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/21/47/7d61a19ba7e6b5f36f0ffff5bbf032a1c1913612caac611e12383069eda0/sentence_transformers-5.1.1.tar.gz", hash = "sha256:8af3f844b2ecf9a6c2dfeafc2c02938a87f61202b54329d70dfd7dfd7d17a84e", size = 374434, upload-time = "2025-09-22T11:28:27.54Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/21/4670d03ab8587b0ab6f7d5fa02a95c3dd6b1f39d0e40e508870201f3d76c/sentence_transformers-5.1.1-py3-none-any.whl", hash = "sha256:5ed544629eafe89ca668a8910ebff96cf0a9c5254ec14b05c66c086226c892fd", size = 486574, upload-time = "2025-09-22T11:28:26.311Z" },
+]
+
+[[package]]
 name = "setuptools"
 version = "80.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2785,6 +2804,7 @@ dependencies = [
     { name = "pyloudnorm" },
     { name = "pyworld" },
     { name = "resampy" },
+    { name = "sentence-transformers" },
     { name = "tensorboard" },
     { name = "tqdm" },
     { name = "transformers" },
@@ -2816,6 +2836,7 @@ requires-dist = [
     { name = "pyloudnorm", specifier = ">=0.1.1" },
     { name = "pyworld", specifier = ">=0.3.5" },
     { name = "resampy", specifier = ">=0.4.3" },
+    { name = "sentence-transformers", specifier = ">=5.1.1" },
     { name = "tensorboard", specifier = ">=2.18.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "transformers", specifier = ">=4.48.2" },
