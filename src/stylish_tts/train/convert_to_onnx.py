@@ -55,9 +55,12 @@ def convert_to_onnx(
     text_lengths = torch.zeros([1], dtype=int).to(device)
     text_lengths[0] = tokens.shape[1] + 2
     text_mask = length_to_mask(text_lengths, text_lengths[0])
+    speech_style = torch.rand([1, model_config.style_dim]).to(device)
+    pe_style = torch.rand([1, model_config.style_dim]).to(device)
+    duration_style = torch.rand([1, model_config.style_dim]).to(device)
 
     with torch.no_grad():
-        inputs = (texts, text_lengths)
+        inputs = (texts, text_lengths, speech_style, pe_style, duration_style)
 
         exported_program = torch.export.export(
             model,
@@ -65,16 +68,18 @@ def convert_to_onnx(
             dynamic_shapes=(
                 (1, Dim.DYNAMIC),
                 (1,),
+                (1, model_config.style_dim),
+                (1, model_config.style_dim),
+                (1, model_config.style_dim),
             ),
         )
 
-        sample = exported_program.module().forward(texts, text_lengths)
-        sample = sample.cpu().numpy()
-        from scipy.io.wavfile import write
-        import numpy as np
-
-        sample = np.multiply(sample, 32768).astype(np.int16)
-        write("sample_torch.wav", 24000, sample)
+        # sample = exported_program.module().forward(texts, text_lengths)
+        # sample = sample.cpu().numpy()
+        # from scipy.io.wavfile import write
+        # import numpy as np
+        # sample = np.multiply(sample, 32768).astype(np.int16)
+        # write("sample_torch.wav", 24000, sample)
 
         onnx_program = torch.onnx.export(
             exported_program,
@@ -88,6 +93,9 @@ def convert_to_onnx(
             dynamic_shapes=(
                 (1, Dim.DYNAMIC),
                 (1,),
+                (1, model_config.style_dim),
+                (1, model_config.style_dim),
+                (1, model_config.style_dim),
             ),
             # report=True,
         )

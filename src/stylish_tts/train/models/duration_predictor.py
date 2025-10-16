@@ -12,17 +12,9 @@ from .text_encoder import MultiHeadAttention
 
 
 class DurationPredictor(torch.nn.Module):
-    def __init__(
-        self, style_dim, inter_dim, text_config, style_config, duration_config
-    ):
+    def __init__(self, style_dim, inter_dim, text_config, duration_config):
         super().__init__()
         self.text_encoder = TextEncoder(inter_dim=inter_dim, config=text_config)
-        self.bert_encoder = torch.nn.Linear(768, inter_dim)
-        self.style_encoder = TextStyleEncoder(
-            inter_dim,
-            style_dim,
-            config=style_config,
-        )
         self.conv_next = torch.nn.ModuleList(
             [
                 ConvNeXtBlock(
@@ -74,10 +66,8 @@ class DurationPredictor(torch.nn.Module):
         attention = self.cross_post(attention)
         return (attention + text_encoding.transpose(1, 2)) / math.sqrt(2.0)
 
-    def forward(self, texts, text_lengths):
+    def forward(self, texts, text_lengths, style):
         encoding, _, _ = self.text_encoder(texts, text_lengths)
-        style = self.style_encoder(encoding, text_lengths)
-        # bert_encoding = self.bert_encoder(bert_in)
         encoding = rearrange(encoding, "b t c -> b c t")
         mask = torch.unsqueeze(sequence_mask(text_lengths, encoding.size(1)), 1).to(
             encoding.dtype

@@ -188,12 +188,11 @@ class Collater(object):
       adaptive_batch_size (bool): if true, decrease batch size when long data comes.
     """
 
-    def __init__(self, return_wave=False, multispeaker=False, *, stage, train):
+    def __init__(self, return_wave=False, multispeaker=False, *, stage, hop_length):
         self.return_wave = return_wave
         self.multispeaker = multispeaker
         self.stage = stage
-        self.train = train
-        self.hop_length = train.model_config.hop_length
+        self.hop_length = hop_length
 
     def __call__(self, batch):
         batch_size = len(batch)
@@ -275,10 +274,11 @@ def build_dataloader(
     epoch=1,
     *,
     stage,
+    hop_length,
     train,
 ):
     collate_config["multispeaker"] = multispeaker
-    collate_fn = Collater(stage=stage, train=train, **collate_config)
+    collate_fn = Collater(stage=stage, hop_length=hop_length, **collate_config)
     drop_last = not validation and probe_batch_size is not None
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -376,20 +376,27 @@ class DynamicBatchSampler(torch.utils.data.Sampler):
             else:
                 samples[key] = remaining
             yield batch
-            self.train.stage.load_batch_sizes()
+            if self.train is not None:
+                self.train.stage.load_batch_sizes()
             sample_keys = list(samples.keys())
 
     def __len__(self):
-        return self.train.stage.get_steps_per_epoch()
-        total = 0
-        for key in self.time_bins.keys():
-            val = self.time_bins[key]
-            total_batch = self.train.stage.get_batch_size(key)
-            if total_batch > 0:
-                total += len(val) // total_batch
-                if not self.drop_last and len(val) % total_batch != 0:
-                    total += 1
-        return total
+        if self.train is not None:
+            return self.train.stage.get_steps_per_epoch()
+        else:
+            result = 0
+            for key in self.time_bins.keys():
+                result += len(self.time_bins[key])
+            return result
+        # total = 0
+        # for key in self.time_bins.keys():
+        #     val = self.time_bins[key]
+        #     total_batch = self.train.stage.get_batch_size(key)
+        #     if total_batch > 0:
+        #         total += len(val) // total_batch
+        #         if not self.drop_last and len(val) % total_batch != 0:
+        #             total += 1
+        # return total
 
     def set_epoch(self, epoch):
         self.epoch = epoch
@@ -404,8 +411,10 @@ class DynamicBatchSampler(torch.utils.data.Sampler):
     def get_batch_size(self, key):
         if self.force_batch_size is not None:
             return self.force_batch_size
-        else:
+        elif self.train is not None:
             return self.train.stage.get_batch_size(key)
+        else:
+            return 1
 
 
 def get_frame_count(i):

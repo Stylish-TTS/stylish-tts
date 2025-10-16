@@ -175,6 +175,7 @@ def train_model(
         multispeaker=train.model_config.multispeaker,
         stage=stage,
         train=train,
+        hop_length=train.model_config.hop_length,
     )
     train.val_dataloader = train.accelerator.prepare(train.val_dataloader)
     train.duration_loss = DurationLoss(

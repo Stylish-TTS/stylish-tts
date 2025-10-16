@@ -116,6 +116,7 @@ class BatchManager:
                             probe_batch_size=batch_size,
                             stage=train.stage.name,
                             train=train,
+                            hop_length=train.model_config.hop_length,
                         )
                         for _, batch in enumerate(loader):
                             _ = train.stage.train_batch(batch, train, probing=True)
@@ -169,6 +170,7 @@ class BatchManager:
             epoch=train.manifest.current_epoch,
             stage=train.stage.name,
             train=train,
+            hop_length=train.model_config.hop_length,
         )
         train.manifest.steps_per_epoch = train.stage.get_steps_per_epoch()
         self.loader = train.accelerator.prepare(self.loader)

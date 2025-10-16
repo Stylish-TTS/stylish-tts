@@ -8,19 +8,20 @@ class PitchDiscriminator(torch.nn.Module):
         self,
     ):
         super(PitchDiscriminator, self).__init__()
+        dim = 64
         self.discriminators = torch.nn.ModuleList(
             [
-                weight_norm(torch.nn.Conv1d(1, 32, kernel_size=5, padding=1)),
-                weight_norm(torch.nn.Conv1d(32, 32, kernel_size=5, padding=1)),
-                weight_norm(torch.nn.Conv1d(32, 32, kernel_size=5, padding=1)),
-                weight_norm(torch.nn.Conv1d(32, 32, kernel_size=5, padding=1)),
-                weight_norm(torch.nn.Conv1d(32, 32, kernel_size=5, padding=1)),
+                weight_norm(torch.nn.Conv1d(3, dim, kernel_size=5, padding=1)),
+                weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),
+                weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),
+                weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),
+                weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),
             ]
         )
-        self.out = weight_norm(torch.nn.Conv1d(32, 1, kernel_size=5, padding=1))
+        self.out = weight_norm(torch.nn.Conv1d(dim, 1, kernel_size=5, padding=1))
 
     def forward(self, y):
-        y = y.unsqueeze(1)
+        # y = y.unsqueeze(1)
         fmap = []
         for i, d in enumerate(self.discriminators):
             y = d(y)

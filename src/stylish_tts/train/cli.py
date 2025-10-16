@@ -268,71 +268,165 @@ def train(config_path, model_config_path, out, stage, checkpoint, reset_stage):
 def convert(config_path, model_config_path, speech, checkpoint):
     """Convert a model to ONNX
 
-    The converted model will be saved in <out-file>.
+    The converted model will be saved to path <speech>.
     """
     print("Convert to ONNX...")
     config = get_config(config_path)
     model_config = get_model_config(model_config_path)
 
-    from stylish_tts.train.train_context import Manifest
+    from .cli_util import Checkpoint
     from stylish_tts.train.convert_to_onnx import convert_to_onnx
-    from stylish_tts.train.models.models import build_model
-    from stylish_tts.train.utils import DurationProcessor
-    from accelerate import Accelerator
-    from accelerate import DistributedDataParallelKwargs
-    from stylish_tts.train.losses import DiscriminatorLoss
 
-    duration_processor = DurationProcessor(
-        class_count=model_config.duration_predictor.duration_classes,
-        max_dur=model_config.duration_predictor.max_duration,
-    ).to(config.training.device)
-    manifest = Manifest()
-
-    ddp_kwargs = DistributedDataParallelKwargs(
-        broadcast_buffers=False, find_unused_parameters=True
-    )
-    accelerator = Accelerator(
-        project_dir=".",
-        split_batches=True,
-        kwargs_handlers=[ddp_kwargs],
-        mixed_precision=config.training.mixed_precision,
-        step_scheduler_with_optimizer=False,
-    )
-    model = build_model(model_config)
-    for key in model:
-        model[key] = accelerator.prepare(model[key])
-        model[key].to(config.training.device)
-
-    disc_loss = DiscriminatorLoss(mrd0=model.mrd0, mrd1=model.mrd1, mrd2=model.mrd2)
-
-    from stylish_tts.train.train_context import NormalizationStats
-
-    norm = NormalizationStats()
-    accelerator.register_for_checkpointing(config)
-    accelerator.register_for_checkpointing(model_config)
-    accelerator.register_for_checkpointing(manifest)
-    accelerator.register_for_checkpointing(disc_loss)
-    accelerator.register_for_checkpointing(norm)
-
-    accelerator.load_state(checkpoint)
+    state = Checkpoint(checkpoint, config, model_config)
 
     convert_to_onnx(
         model_config,
         speech,
-        model,
+        state.model,
         config.training.device,
-        duration_processor,
+        state.duration_processor,
     )
     # Embed normalization stats into ONNX metadata (only if present in checkpoint)
     from stylish_tts.train.convert_to_onnx import add_meta_data_onnx
 
-    if norm.frames > 0:
-        add_meta_data_onnx(speech, "mel_log_mean", str(norm.mel_log_mean))
-        add_meta_data_onnx(speech, "mel_log_std", str(norm.mel_log_std))
+    if state.norm.frames > 0:
+        add_meta_data_onnx(speech, "mel_log_mean", str(state.norm.mel_log_mean))
+        add_meta_data_onnx(speech, "mel_log_std", str(state.norm.mel_log_std))
         logger.info(
-            f"Embedded normalization stats from checkpoint: mean={norm.mel_log_mean:.4f}, std={norm.mel_log_std:.4f}"
+            f"Embedded normalization stats from checkpoint: mean={state.norm.mel_log_mean:.4f}, std={state.norm.mel_log_std:.4f}"
         )
     else:
         logger.warning(
             "Checkpoint did not contain normalization stats; skipping embedding in ONNX."
         )
+
+
+@cli.command(short_help="Generate a voice pack.")
+@click.argument(
+    "config_path",
+    type=str,
+)
+@click.option(
+    "-mc",
+    "--model-config",
+    "model_config_path",
+    default="",
+    type=str,
+    help="Model configuration (optional), defaults to known-good model parameters.",
+)
+@click.option("--voicepack", required=True, type=str, help="Path to write voice pack")
+@click.option(
+    "--checkpoint",
+    required=True,
+    type=str,
+    help="Path to a model checkpoint to load for conversion",
+)
+def voicepack(config_path, model_config_path, voicepack, checkpoint):
+    from pathlib import Path
+    import torch
+    import torchaudio
+    import tqdm
+    from safetensors.torch import save_file
+    from stylish_tts.train.cli_util import Checkpoint
+    from stylish_tts.train.dataloader import build_dataloader, FilePathDataset
+    from stylish_tts.lib.text_utils import TextCleaner
+    from stylish_tts.train.utils import get_data_path_list, calculate_mel
+
+    print("Generate voicepack...")
+    config = get_config(config_path)
+    model_config = get_model_config(model_config_path)
+    device = config.training.device
+    state = Checkpoint(checkpoint, config, model_config)
+    if state.norm.frames <= 0:
+        exit("No normalization state found. Cannot generate voicepack.")
+
+    to_mel = torchaudio.transforms.MelSpectrogram(
+        n_mels=model_config.n_mels,
+        n_fft=model_config.n_fft,
+        win_length=model_config.win_length,
+        hop_length=model_config.hop_length,
+        sample_rate=model_config.sample_rate,
+    ).to(config.training.device)
+    text_cleaner = TextCleaner(model_config.symbol)
+
+    datalist = get_data_path_list(Path(config.dataset.path) / config.dataset.train_data)
+
+    dataset = FilePathDataset(
+        data_list=datalist,
+        root_path=Path(config.dataset.path) / config.dataset.wav_path,
+        text_cleaner=text_cleaner,
+        model_config=model_config,
+        pitch_path=Path(config.dataset.path) / config.dataset.pitch_path,
+        alignment_path=Path(config.dataset.path) / config.dataset.alignment_path,
+        duration_processor=state.duration_processor,
+    )
+
+    time_bins, _ = dataset.time_bins()
+    dataloader = build_dataloader(
+        dataset,
+        time_bins,
+        validation=True,
+        num_workers=config.training.data_workers,
+        device=config.training.device,
+        multispeaker=model_config.multispeaker,
+        stage="voicepack",
+        train=None,
+        hop_length=model_config.hop_length,
+    )
+
+    iterator = tqdm.tqdm(
+        iterable=enumerate(dataloader),
+        desc="Generating styles",
+        total=len(datalist),
+        unit="steps",
+        initial=0,
+        colour="GREEN",
+        leave=False,
+        dynamic_ncols=True,
+    )
+    state.model.speech_style_encoder.eval()
+    state.model.pe_style_encoder.eval()
+    state.model.duration_style_encoder.eval()
+    styles = [[] for _ in range(512)]
+    for _, batch in iterator:
+        with torch.no_grad():
+            wave = batch[0].to(device)
+            length = batch[2][0].to(device)
+            mel, _ = calculate_mel(
+                wave, to_mel, state.norm.mel_log_mean, state.norm.mel_log_std
+            )
+            speech_style = state.model.speech_style_encoder(mel.unsqueeze(1))
+            pe_style = state.model.pe_style_encoder(mel.unsqueeze(1))
+            duration_style = state.model.duration_style_encoder(mel.unsqueeze(1))
+
+            combined = torch.cat(
+                [
+                    speech_style.squeeze(0),
+                    pe_style.squeeze(0),
+                    duration_style.squeeze(0),
+                ],
+                dim=0,
+            )
+            styles[length.item() - 1].append(combined)
+
+    result = []
+    for i in range(512):
+        lower = i
+        upper = i + 1
+        while total_len(styles[lower:upper]) < 100:
+            lower -= 1
+            upper += 1
+            if lower < 0 and upper > 512:
+                exit("Need at least 100 styles to make a voicepack")
+        flattened = sum(styles[lower:upper], [])
+        average = torch.stack(flattened, dim=0).mean(dim=0)
+        result.append(average)
+    result = torch.stack(result, dim=0)
+    save_file({"basic_voicepack": result}, voicepack)
+
+
+def total_len(listlist):
+    result = 0
+    for item in listlist:
+        result += len(item)
+    return result

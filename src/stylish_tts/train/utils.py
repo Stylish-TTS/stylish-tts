@@ -534,3 +534,15 @@ def torch_empty_cache(device):
         pass
     else:
         exit(f"Unknown device {device}. Could not empty cache.")
+
+
+@torch.no_grad()
+def calculate_mel(audio, to_mel, mean, std):
+    mel = to_mel(audio)
+    mel = (torch.log(1e-5 + mel) - mean) / std
+    # STFT returns audio_len // hop_len + 1, so we strip off the extra here
+    mel = mel[:, :, : (mel.shape[-1] - mel.shape[-1] % 2)]
+    mel_length = torch.full(
+        [audio.shape[0]], mel.shape[2], dtype=torch.long, device=audio.device
+    )
+    return mel, mel_length

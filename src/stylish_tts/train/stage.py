@@ -9,6 +9,8 @@ import torch
 from munch import Munch
 import tqdm
 import matplotlib.pyplot as plt
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
 
 from stylish_tts.train.loss_log import combine_logs
 from stylish_tts.train.stage_type import stages, is_valid_stage, valid_stage_list
@@ -139,6 +141,9 @@ class Stage:
         return result.detach()
 
     def validate(self, train):
+        # train.pe_style_array = np.stack(list(train.pe_style_dict.values()))
+        # train.pe_knn = NearestNeighbors(algorithm="ball_tree")
+        # train.pe_knn.fit(train.pe_style_array)
         sample_count = train.config.validation.sample_count
         for key in train.model:
             train.model[key].eval()
@@ -332,7 +337,7 @@ def prepare_batch(
     prepared = {}
     for i, key in enumerate(batch_names):
         if key in keys_to_transfer:
-            if key != "paths":
+            if key != "path":
                 prepared[key] = inputs[i].to(device)
             else:
                 prepared[key] = inputs[i]

@@ -160,6 +160,10 @@ class TrainContext:
             sample_rate=self.model_config.sample_rate,
         ).to(self.config.training.device)
 
+        self.pe_style_dict = {}
+        self.pe_style_sequence = None
+        self.pe_knn = None
+
     def reset_out_dir(self, stage_name):
         self.out_dir = osp.join(self.base_output_dir, stage_name)
 

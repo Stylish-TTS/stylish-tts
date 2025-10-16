@@ -2,7 +2,7 @@ import math
 import torch
 from torch import nn
 from torch.nn.utils.parametrizations import weight_norm
-from .text_encoder import MultiHeadAttention
+from .text_encoder import MultiHeadAttention, TextEncoder
 from .prosody_encoder import ProsodyEncoder
 from stylish_tts.train.utils import length_to_mask
 from .ada_norm import AdaptiveLayerNorm, AdaptiveDecoderBlock
@@ -14,11 +14,14 @@ class PitchEnergyPredictor(torch.nn.Module):
         style_dim,
         inter_dim,
         text_config,
-        style_config,
         duration_config,
         pitch_energy_config,
     ):
         super().__init__()
+        self.text_encoder = TextEncoder(
+            inter_dim=inter_dim,
+            config=text_config,
+        )
         self.prosody_encoder = ProsodyEncoder(
             sty_dim=style_dim,
             d_model=inter_dim,
@@ -103,7 +106,8 @@ class PitchEnergyPredictor(torch.nn.Module):
         attention = self.cross_post(attention)
         return (base + attention) / math.sqrt(2.0)
 
-    def forward(self, text_encoding, text_lengths, alignment, style):
+    def forward(self, texts, text_lengths, alignment, style):
+        text_encoding, _, _ = self.text_encoder(texts, text_lengths)
         mask = length_to_mask(text_lengths, text_encoding.shape[2]).to(
             text_lengths.device
         )
