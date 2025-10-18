@@ -46,7 +46,7 @@ def speak_document(model, voicepack, infile, outfile, lang):
     sbert_pack = voicepack[:, 192:]
 
     sbert = SentenceTransformer("stsb-mpnet-base-v2")
-    matcher = NearestNeighbors(n_neighbors=20, algorithm="ball_tree")
+    matcher = NearestNeighbors(n_neighbors=8, algorithm="ball-tree")
     matcher.fit(sbert_pack)
 
     model = StylishModel(model)
@@ -59,8 +59,11 @@ def speak_document(model, voicepack, infile, outfile, lang):
             plaintext = fields[1]
             embedding = sbert.encode([plaintext])
 
-            indices = matcher.kneighbors(embedding, return_distance=False)
-            speech_style = speech_pack[indices].mean(axis=1)
+            distances, indices = matcher.kneighbors(embedding, return_distance=True)
+            distances = 1 / distances
+            distances = distances / distances.sum(axis=1)
+            distances = np.expand_dims(distances, 2).astype(np.float32)
+            speech_style = (speech_pack[indices] * distances).sum(axis=1)
             pe_style = pe_pack[indices].mean(axis=1)
             duration_style = duration_pack[indices].mean(axis=1)
 
