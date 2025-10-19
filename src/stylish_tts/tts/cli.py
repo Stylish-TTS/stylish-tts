@@ -46,7 +46,7 @@ def speak_document(model, voicepack, infile, outfile, lang):
     sbert_pack = voicepack[:, 192:]
 
     sbert = SentenceTransformer("stsb-mpnet-base-v2")
-    matcher = NearestNeighbors(n_neighbors=8, algorithm="ball-tree")
+    matcher = NearestNeighbors(n_neighbors=8, algorithm="ball_tree")
     matcher.fit(sbert_pack)
 
     model = StylishModel(model)
