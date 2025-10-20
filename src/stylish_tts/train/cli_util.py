@@ -58,6 +58,7 @@ class Checkpoint:
             mrd1=self.model.mrd1,
             mrd2=self.model.mrd2,
             pitch=self.model.pitch_disc,
+            duration=self.model.dur_disc,
         )
 
         from stylish_tts.train.train_context import NormalizationStats

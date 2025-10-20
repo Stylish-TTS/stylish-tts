@@ -82,6 +82,7 @@ class AcousticStep:
                 train.normalization.mel_log_mean,
                 train.normalization.mel_log_std,
             ).squeeze(1)
+            self.base_pitch = batch.pitch
             self.pitch = normalize_pitch(
                 batch.pitch, train.f0_log2_mean, train.f0_log2_std
             )
@@ -122,6 +123,9 @@ class AcousticStep:
                     self.pred_energy,
                     self.pred_voiced.round(),
                     self.speech_style,
+                    denormalize_pitch(
+                        pred_pitch, train.f0_log2_mean, train.f0_log2_std
+                    ),
                 )
             else:
                 self.pred = train.model.speech_predictor(
@@ -132,6 +136,7 @@ class AcousticStep:
                     self.energy,
                     self.voiced,
                     self.speech_style,
+                    self.base_pitch,
                 )
             (
                 self.target_spec,
@@ -482,12 +487,23 @@ def train_duration(
 
     # step.mel_loss()
     # step.magphase_loss()
+    target_disc = target_dur.float().unsqueeze(1)
+    pred_disc = duration.unsqueeze(1)
+    log.add_loss(
+        "generator",
+        train.generator_loss(
+            target_list=[target_disc],
+            pred_list=[pred_disc],
+            used=["dur_disc"],
+            index=0,
+        ).mean(),
+    )
 
     log.add_loss("duration_ce", loss_ce)
     log.add_loss("duration", duration_loss)  # loss_cdw)
     train.accelerator.backward(log.backwards_loss())
 
-    return log.detach(), None, None
+    return log.detach(), detach_all([target_disc]), detach_all([pred_disc])
 
 
 @torch.no_grad()
@@ -572,7 +588,7 @@ stages["duration"] = StageType(
         "speech_predictor",
         "speech_style_encoder",
     ],
-    discriminators=[],
+    discriminators=["dur_disc"],
     inputs=[
         "text",
         "text_length",

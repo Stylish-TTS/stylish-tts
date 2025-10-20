@@ -1,3 +1,4 @@
+from functools import partial
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -498,8 +499,31 @@ class Generator(torch.nn.Module):
     def __init__(self, *, style_dim, n_fft, win_length, hop_length, config):
         super(Generator, self).__init__()
 
+        self.prior_generator = partial(
+            generate_pcph,
+            hop_length=hop_length,
+            # TODO: Remove hardcoded value
+            sample_rate=24000,
+        )
+
+        self.amp_prior_conv = Conv1d(
+            n_fft // 2 + 1,
+            config.hidden_dim,
+            config.io_conv_kernel_size,
+            1,
+            padding=get_padding(config.io_conv_kernel_size, 1),
+        )
+
+        self.phase_prior_conv = Conv1d(
+            n_fft // 2 + 1,
+            config.hidden_dim,
+            config.io_conv_kernel_size,
+            1,
+            padding=get_padding(config.io_conv_kernel_size, 1),
+        )
+
         self.amp_input_conv = Conv1d(
-            config.input_dim,
+            config.input_dim + config.hidden_dim * 2,
             config.hidden_dim,
             config.io_conv_kernel_size,
             1,
@@ -581,8 +605,26 @@ class Generator(torch.nn.Module):
             nn.init.trunc_normal_(m.weight, std=0.02)
             nn.init.constant_(m.bias, 0)
 
-    def forward(self, *, mel, style, pitch, energy):
-        logamp = self.amp_input_conv(mel)
+    def forward(self, *, mel, style, pitch, energy, voiced):
+        with torch.no_grad():
+            # pitch = F.interpolate(
+            #     pitch.unsqueeze(1),
+            #     scale_factor=self.prod_up_factors,
+            #     mode="linear",
+            #     align_corners=False,
+            # )
+            prior = self.prior_generator(pitch.unsqueeze(1), voiced.unsqueeze(1))
+            prior = prior.squeeze(1)
+            har_spec, har_x, har_y = self.stft.transform(prior)
+            har_spec = har_spec[:, :, :-1]
+            har_phase = torch.atan2(har_y, har_x)
+            har_phase = har_phase[:, :, :-1]
+
+        logamp_prior = self.amp_prior_conv(har_spec)
+        phase_prior = self.phase_prior_conv(har_phase)
+        logamp_in = torch.cat([mel, logamp_prior, phase_prior], dim=1)
+
+        logamp = self.amp_input_conv(logamp_in)
         logamp = logamp.transpose(1, 2)
         logamp = self.amp_norm(logamp)
         logamp = self.amp_conformer(logamp, style)
@@ -676,3 +718,74 @@ class GRN(torch.nn.Module):
         Gx = torch.norm(x, p=2, dim=1, keepdim=True)
         Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
         return self.gamma * (x * Nx) + self.beta + x
+
+
+def generate_pcph(
+    f0,
+    voiced,
+    hop_length: int,
+    sample_rate: int,
+    noise_amplitude=0.01,
+    random_init_phase=True,
+    power_factor=0.1,
+    max_frequency=None,
+    *args,
+    **kwargs,
+):
+    """
+    Generate pseudo-constant-power harmonic waveforms based on input F0 sequences.
+    The spectral envelope of harmonics is designed to have flat spectral envelopes.
+
+    Args:
+        f0 (Tensor): F0 sequences with shape (batch, 1, frames).
+        hop_length (int): Hop length of the F0 sequence.
+        sample_rate (int): Sampling frequency of the waveform in Hz.
+        noise_amplitude (float, optional): Amplitude of the noise component (default: 0.01).
+        random_init_phase (bool, optional): Whether to initialize phases randomly (default: True).
+        power_factor (float, optional): Factor to control the power of harmonics (default: 0.1).
+        max_frequency (float, optional): Maximum frequency to define the number of harmonics (default: None).
+
+    Returns:
+        Tensor: Generated harmonic waveform with shape (batch, 1, frames * hop_length).
+    """
+    batch, _, frames = f0.size()
+    device = f0.device
+    noise = noise_amplitude * torch.randn(
+        (batch, 1, frames * hop_length), device=device
+    )
+    if torch.all(voiced.round() <= 0.1):
+        return noise
+
+    # vuv = f0 > 10.0
+    vuv = voiced.round().bool()
+    min_f0_value = torch.min(f0[f0 > 20]).item()
+    max_frequency = max_frequency if max_frequency is not None else sample_rate / 2
+    max_n_harmonics = min(16, int(max_frequency / min_f0_value))
+    n_harmonics = torch.ones_like(f0, dtype=torch.float)
+    n_harmonics[vuv] = sample_rate / 2.0 / f0[vuv]
+
+    indices = torch.arange(1, max_n_harmonics + 1, device=device).reshape(1, -1, 1)
+    harmonic_f0 = f0 * indices
+
+    # Compute harmonic mask
+    harmonic_mask = harmonic_f0 <= (sample_rate / 2.0)
+    harmonic_mask = torch.repeat_interleave(harmonic_mask, hop_length, dim=2)
+
+    # Compute harmonic amplitude
+    harmonic_amplitude = vuv * power_factor * torch.sqrt(2.0 / n_harmonics)
+    harmocic_amplitude = torch.repeat_interleave(harmonic_amplitude, hop_length, dim=2)
+
+    # Generate sinusoids
+    f0 = torch.repeat_interleave(f0, hop_length, dim=2)
+    radious = f0.to(torch.float64) / sample_rate
+    if random_init_phase:
+        radious[..., 0] += torch.rand((1, 1), device=device)
+    radious = torch.cumsum(radious, dim=2)
+    harmonic_phase = 2.0 * torch.pi * radious * indices
+    harmonics = torch.sin(harmonic_phase).to(torch.float32)
+
+    # Multiply coefficients to the harmonic signal
+    harmonics = harmonic_mask * harmonics
+    harmonics = harmocic_amplitude * torch.sum(harmonics, dim=1, keepdim=True)
+
+    return harmonics + noise

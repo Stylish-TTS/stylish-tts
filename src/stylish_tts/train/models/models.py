@@ -73,7 +73,8 @@ def build_model(model_config: ModelConfig):
         speech_style_encoder=speech_style_encoder,
         pe_style_encoder=pe_style_encoder,
         duration_style_encoder=duration_style_encoder,
-        pitch_disc=PitchDiscriminator(),
+        pitch_disc=PitchDiscriminator(dim_in=3),
+        dur_disc=PitchDiscriminator(dim_in=1),
     )
 
     return nets

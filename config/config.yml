@@ -75,19 +75,19 @@ loss_weight:
   mel: 5
   # generator loss
   # -- if voice sounds autotuned, try increasing
-  generator: 6
+  generator: 8
   # speech-language model feature matching loss
   slm: 0.2
   # pitch F0 reconstruction loss
-  pitch: 3
+  pitch: 8
   # energy reconstruction loss
-  energy: 1
+  energy: 8
   # duration loss
   # -- if voice is too slow and pauses are too long, try increasing this and decreasing the other
-  duration: 1
+  duration: 8
   # duration predictor probability output cross entropy loss
   # -- if voice is too fast and pauses are too short, try increasing this and decreasing the other
-  duration_ce: 1
+  duration_ce: 8
   # style reconstruction loss
   style: 1
   # magnitude loss

@@ -6,12 +6,14 @@ from torch.nn.utils.parametrizations import weight_norm
 class PitchDiscriminator(torch.nn.Module):
     def __init__(
         self,
+        *,
+        dim_in,
     ):
         super(PitchDiscriminator, self).__init__()
         dim = 64
         self.discriminators = torch.nn.ModuleList(
             [
-                weight_norm(torch.nn.Conv1d(3, dim, kernel_size=5, padding=1)),
+                weight_norm(torch.nn.Conv1d(dim_in, dim, kernel_size=5, padding=1)),
                 weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),
                 weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),
                 weight_norm(torch.nn.Conv1d(dim, dim, kernel_size=5, padding=1)),

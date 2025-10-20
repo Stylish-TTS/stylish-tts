@@ -207,12 +207,14 @@ def train_model(
         mrd1=train.model.mrd1,
         mrd2=train.model.mrd2,
         pitch=train.model.pitch_disc,
+        duration=train.model.dur_disc,
     ).to(train.config.training.device)
     train.discriminator_loss = DiscriminatorLoss(
         mrd0=train.model.mrd0,
         mrd1=train.model.mrd1,
         mrd2=train.model.mrd2,
         pitch=train.model.pitch_disc,
+        duration=train.model.dur_disc,
     ).to(train.config.training.device)
     train.wavlm_loss = WavLMLoss(
         train.model_config.slm.model,
