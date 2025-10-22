@@ -12,6 +12,8 @@ from stylish_tts.train.utils import (
     length_to_mask,
     leaky_clamp,
     calculate_mel,
+    normalize_pitch,
+    denormalize_pitch,
 )
 from typing import List
 from stylish_tts.train.losses import multi_phase_loss
@@ -124,7 +126,7 @@ class AcousticStep:
                     self.pred_voiced.round(),
                     self.speech_style,
                     denormalize_pitch(
-                        pred_pitch, train.f0_log2_mean, train.f0_log2_std
+                        self.pred_pitch, train.f0_log2_mean, train.f0_log2_std
                     ),
                 )
             else:
@@ -558,6 +560,7 @@ def validate_duration(batch, train):
             pred_energy,
             pred_voiced,
             speech_style[i : i + 1],
+            denormalize_pitch(pred_pitch, train.f0_log2_mean, train.f0_log2_std),
         )
         audio = rearrange(pred.audio, "1 1 l -> l")
         results.append(audio)
@@ -606,45 +609,3 @@ def detach_all(spec_list):
     for item in spec_list:
         result.append(item.detach())
     return result
-
-
-def normalize_pitch(f0, log_f0_mean, log_f0_std):
-    """
-    Normalizes f0 using pre-calculated log-scale z-score statistics.
-    """
-
-    voiced = f0 > 10
-
-    # Use torch or numpy log2 based on input type
-    log_f0 = torch.log2(f0 + 1e-8)
-
-    # Standardize using the calculated stats
-    normed_f0 = (log_f0 - log_f0_mean) / log_f0_std
-
-    # Set unvoiced parts to 0 (which now represents the mean of the normed space)
-    normed_f0 = normed_f0 * voiced
-    return normed_f0
-
-
-def denormalize_pitch(
-    normed_f0,
-    log_f0_mean,
-    log_f0_std,
-    min_hz=30,
-    max_hz=600,
-):
-    """
-    Denormalizes f0 from z-score + log-scale, WITH a safety clamp.
-    """
-    # De-standardize
-    log_f0 = normed_f0 * log_f0_std + log_f0_mean
-
-    # Convert back from log-scale
-    f0 = 2**log_f0
-    voiced = f0 > 10
-    f0 = leaky_clamp(f0, min_f=min_hz, max_f=max_hz, slope=0.01)
-
-    # Set unvoiced parts to 0
-    f0 = f0 * voiced
-
-    return f0

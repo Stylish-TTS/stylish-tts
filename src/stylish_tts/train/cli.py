@@ -274,10 +274,41 @@ def convert(config_path, model_config_path, speech, checkpoint):
     config = get_config(config_path)
     model_config = get_model_config(model_config_path)
 
+    from pathlib import Path
     from .cli_util import Checkpoint
+    from stylish_tts.lib.text_utils import TextCleaner
     from stylish_tts.train.convert_to_onnx import convert_to_onnx
+    from stylish_tts.train.dataloader import FilePathDataset
+    from stylish_tts.train.utils import get_data_path_list
 
     state = Checkpoint(checkpoint, config, model_config)
+
+    text_cleaner = TextCleaner(model_config.symbol)
+    datalist = get_data_path_list(Path(config.dataset.path) / config.dataset.train_data)
+    dataset = FilePathDataset(
+        data_list=datalist,
+        root_path=Path(config.dataset.path) / config.dataset.wav_path,
+        text_cleaner=text_cleaner,
+        model_config=model_config,
+        pitch_path=Path(config.dataset.path) / config.dataset.pitch_path,
+        alignment_path=Path(config.dataset.path) / config.dataset.alignment_path,
+        duration_processor=state.duration_processor,
+    )
+
+    all_f0 = []
+    for f0 in dataset.pitch.values():
+        all_f0.append(f0[f0 > 10].flatten())
+    all_f0 = torch.cat(all_f0, 0)
+    all_f0 = torch.log2(all_f0 + 1e-9)
+    f0_log2_mean = all_f0.mean().item()
+    f0_log2_std = all_f0.std().item()
+
+    metadata = {
+        "pitch_log2_mean": str(f0_log2_mean),
+        "pitch_log2_std": str(f0_log2_std),
+        "mel_log_mean": str(state.norm.mel_log_mean),
+        "mel_log_std": str(state.norm.mel_log_std),
+    }
 
     convert_to_onnx(
         model_config,
@@ -285,20 +316,8 @@ def convert(config_path, model_config_path, speech, checkpoint):
         state.model,
         config.training.device,
         state.duration_processor,
+        metadata,
     )
-    # Embed normalization stats into ONNX metadata (only if present in checkpoint)
-    from stylish_tts.train.convert_to_onnx import add_meta_data_onnx
-
-    if state.norm.frames > 0:
-        add_meta_data_onnx(speech, "mel_log_mean", str(state.norm.mel_log_mean))
-        add_meta_data_onnx(speech, "mel_log_std", str(state.norm.mel_log_std))
-        logger.info(
-            f"Embedded normalization stats from checkpoint: mean={state.norm.mel_log_mean:.4f}, std={state.norm.mel_log_std:.4f}"
-        )
-    else:
-        logger.warning(
-            "Checkpoint did not contain normalization stats; skipping embedding in ONNX."
-        )
 
 
 @cli.command(short_help="Generate a voice pack.")

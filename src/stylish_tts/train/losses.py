@@ -179,8 +179,14 @@ class DiscriminatorLoss(torch.nn.Module):
         return self.discriminators[key].get_disc_lr_multiplier()
 
     def forward(self, *, target_list, pred_list, used, index):
-        if "pitch_disc" in used or "dur_disc" in used:
-            loss = self.disc_list[-1](target=target_list[0], pred=pred_list[0])
+        if "pitch_disc" in used:
+            loss = self.discriminators["pitch_disc"](
+                target=target_list[0], pred=pred_list[0]
+            )
+        elif "dur_disc" in used:
+            loss = self.discriminators["dur_disc"](
+                target=target_list[0], pred=pred_list[0]
+            )
         else:
             loss = self.disc_list[index](
                 target=target_list[index], pred=pred_list[index]
@@ -295,8 +301,12 @@ class GeneratorLoss(torch.nn.Module):
         ]
 
     def forward(self, *, target_list, pred_list, used, index):
-        if "pitch_disc" in used or "dur_disc" in used:
-            loss = self.gen_list[-1](target=target_list[0], pred=pred_list[0])
+        if "pitch_disc" in used:
+            loss = self.generators["pitch_disc"](
+                target=target_list[0], pred=pred_list[0]
+            )
+        elif "dur_disc" in used:
+            loss = self.generators["dur_disc"](target=target_list[0], pred=pred_list[0])
         else:
             loss = self.gen_list[index](
                 target=target_list[index], pred=pred_list[index]

@@ -753,27 +753,28 @@ def generate_pcph(
     noise = noise_amplitude * torch.randn(
         (batch, 1, frames * hop_length), device=device
     )
-    if torch.all(voiced.round() <= 0.1):
-        return noise
+    # if torch.all(voiced.round() <= 0.1):
+    #     return noise
 
     # vuv = f0 > 10.0
     vuv = voiced.round().bool()
-    min_f0_value = torch.min(f0[f0 > 20]).item()
+    # min_f0_value = torch.min(f0[f0 > 20]).item()
     max_frequency = max_frequency if max_frequency is not None else sample_rate / 2
-    max_n_harmonics = min(16, int(max_frequency / min_f0_value))
-    n_harmonics = torch.ones_like(f0, dtype=torch.float)
-    n_harmonics[vuv] = sample_rate / 2.0 / f0[vuv]
+    max_n_harmonics = 16  # min(16, int(max_frequency / min_f0_value))
+    # n_harmonics = torch.ones_like(f0, dtype=torch.float)
+    # n_harmonics = torch.clamp(vuv * (sample_rate / 2.0 / torch.clamp(f0, min=1)), min=1) # f0[vuv]
 
     indices = torch.arange(1, max_n_harmonics + 1, device=device).reshape(1, -1, 1)
     harmonic_f0 = f0 * indices
 
     # Compute harmonic mask
     harmonic_mask = harmonic_f0 <= (sample_rate / 2.0)
+    n_harmonics = torch.clamp(vuv * harmonic_mask.sum(dim=1, keepdim=True), min=1)
     harmonic_mask = torch.repeat_interleave(harmonic_mask, hop_length, dim=2)
 
     # Compute harmonic amplitude
     harmonic_amplitude = vuv * power_factor * torch.sqrt(2.0 / n_harmonics)
-    harmocic_amplitude = torch.repeat_interleave(harmonic_amplitude, hop_length, dim=2)
+    harmonic_amplitude = torch.repeat_interleave(harmonic_amplitude, hop_length, dim=2)
 
     # Generate sinusoids
     f0 = torch.repeat_interleave(f0, hop_length, dim=2)
@@ -786,6 +787,6 @@ def generate_pcph(
 
     # Multiply coefficients to the harmonic signal
     harmonics = harmonic_mask * harmonics
-    harmonics = harmocic_amplitude * torch.sum(harmonics, dim=1, keepdim=True)
+    harmonics = harmonic_amplitude * torch.sum(harmonics, dim=1, keepdim=True)
 
     return harmonics + noise

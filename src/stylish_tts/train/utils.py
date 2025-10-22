@@ -546,3 +546,45 @@ def calculate_mel(audio, to_mel, mean, std):
         [audio.shape[0]], mel.shape[2], dtype=torch.long, device=audio.device
     )
     return mel, mel_length
+
+
+def normalize_pitch(f0, log_f0_mean, log_f0_std):
+    """
+    Normalizes f0 using pre-calculated log-scale z-score statistics.
+    """
+
+    voiced = f0 > 10
+
+    # Use torch or numpy log2 based on input type
+    log_f0 = torch.log2(f0 + 1e-8)
+
+    # Standardize using the calculated stats
+    normed_f0 = (log_f0 - log_f0_mean) / log_f0_std
+
+    # Set unvoiced parts to 0 (which now represents the mean of the normed space)
+    normed_f0 = normed_f0 * voiced
+    return normed_f0
+
+
+def denormalize_pitch(
+    normed_f0,
+    log_f0_mean,
+    log_f0_std,
+    min_hz=30,
+    max_hz=600,
+):
+    """
+    Denormalizes f0 from z-score + log-scale, WITH a safety clamp.
+    """
+    # De-standardize
+    log_f0 = normed_f0 * log_f0_std + log_f0_mean
+
+    # Convert back from log-scale
+    f0 = 2**log_f0
+    voiced = f0 > 10
+    f0 = leaky_clamp(f0, min_f=min_hz, max_f=max_hz, slope=0.01)
+
+    # Set unvoiced parts to 0
+    f0 = f0 * voiced
+
+    return f0

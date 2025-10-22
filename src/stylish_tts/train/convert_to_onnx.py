@@ -10,11 +10,13 @@ from torch.export.dynamic_shapes import Dim
 from einops import rearrange
 
 
-def add_meta_data_onnx(filename, key, value):
+def add_meta_data_onnx(filename, metadata):
     model = onnx.load(filename)
-    meta = model.metadata_props.add()
-    meta.key = key
-    meta.value = value
+    for key in metadata.keys():
+        value = metadata[key]
+        meta = model.metadata_props.add()
+        meta.key = key
+        meta.value = value
     onnx.save(model, filename)
 
 
@@ -24,6 +26,7 @@ def convert_to_onnx(
     model_in,
     device,
     duration_processor,
+    metadata,
 ):
     text_cleaner = TextCleaner(model_config.symbol)
     model = ExportModel(
@@ -31,6 +34,8 @@ def convert_to_onnx(
         device=device,
         class_count=duration_processor.class_count,
         max_dur=duration_processor.max_dur,
+        pitch_log2_mean=float(metadata["pitch_log2_mean"]),
+        pitch_log2_std=float(metadata["pitch_log2_std"]),
     ).eval()
     stft = STFT(
         filter_length=model_config.n_fft,
@@ -100,4 +105,5 @@ def convert_to_onnx(
             # report=True,
         )
         onnx_program.save(speech_path)
-    add_meta_data_onnx(speech_path, "model_config", model_config.model_dump_json())
+    metadata["model_config"] = model_config.model_dump_json()
+    add_meta_data_onnx(speech_path, metadata)
