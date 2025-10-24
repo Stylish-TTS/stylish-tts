@@ -166,8 +166,10 @@ class FilePathDataset(torch.utils.data.Dataset):
         time_bin = get_time_bin(wave.shape[0], self.hop_length)
         if time_bin != -1:
             frame_count = get_frame_count(time_bin)
-            pad_start = (frame_count * self.hop_length - wave.shape[0]) // 2
-            pad_end = frame_count * self.hop_length - wave.shape[0] - pad_start
+            # pad_start = (frame_count * self.hop_length - wave.shape[0]) // 2
+            # pad_end = frame_count * self.hop_length - wave.shape[0] - pad_start
+            pad_start = (frame_count * 300 - wave.shape[0]) // 2
+            pad_end = frame_count * 300 - wave.shape[0] - pad_start
         wave = np.concatenate(
             [np.zeros([pad_start]), wave, np.zeros([pad_end])], axis=0
         )
@@ -226,10 +228,11 @@ class Collater(object):
             text_lengths[bid] = text_size
             paths[bid] = path
             waves[bid] = wave
+            # TODO: The 4 here and in alignments is a kludge, probably should be removed
             if self.stage != "alignment":
                 if pitch is None:
                     exit(f"Pitch not found for segment {path}")
-                pitches[bid] = pitch
+                pitches[bid] = torch.repeat_interleave(pitch, 4, dim=-1)
 
             # alignments[bid, :text_size, : mel_length // 2] = duration
             # pred_dur = duration[0]
@@ -247,7 +250,7 @@ class Collater(object):
             #     if alignment.shape[1] != mel_length:
             #         exit(f"Alignment for segment {path} did not match audio length")
             #     alignments[bid, :text_size, :mel_length] = alignment
-            alignments[bid, :1, :text_size] = duration[:1]
+            alignments[bid, :1, :text_size] = duration[:1] * 4
 
         result = (
             waves,
@@ -421,14 +424,15 @@ def get_frame_count(i):
     return i * 20 + 20 + 40
 
 
+# TODO: More badness. Make it hop_length again
 def get_time_bin(sample_count, hop_length):
     result = -1
-    frames = sample_count // hop_length
+    frames = sample_count // 300  # hop_length
     if frames >= 20:
         result = (frames - 20) // 20
     return result
 
 
 def get_padded_time_bin(sample_count, hop_length):
-    frames = sample_count // hop_length
+    frames = sample_count // 300  # hop_length
     return (frames - 60) // 20
