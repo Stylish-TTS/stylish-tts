@@ -148,16 +148,25 @@ class AdaptiveDecoderBlock(nn.Module):
         style_dim=64,
         actv=nn.LeakyReLU(0.2),
         dropout_p=0.0,
+        kernel_size=3,
     ):
         super().__init__()
         self.actv = actv
         self.learned_sc = dim_in != dim_out
-        self._build_weights(dim_in, dim_out, style_dim)
+        self._build_weights(dim_in, dim_out, style_dim, kernel_size)
         self.dropout = nn.Dropout(dropout_p)
 
-    def _build_weights(self, dim_in, dim_out, style_dim):
-        self.conv1 = weight_norm(nn.Conv1d(dim_in, dim_out, 3, 1, 1))
-        self.conv2 = weight_norm(nn.Conv1d(dim_out, dim_out, 3, 1, 1))
+    def _build_weights(self, dim_in, dim_out, style_dim, kernel_size):
+        self.conv1 = weight_norm(
+            nn.Conv1d(
+                dim_in, dim_out, kernel_size=kernel_size, padding=kernel_size // 2
+            )
+        )
+        self.conv2 = weight_norm(
+            nn.Conv1d(
+                dim_out, dim_out, kernel_size=kernel_size, padding=kernel_size // 2
+            )
+        )
         self.norm1 = AdaptiveInstance(style_dim, dim_in)
         self.norm2 = AdaptiveInstance(style_dim, dim_out)
         if self.learned_sc:

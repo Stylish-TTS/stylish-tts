@@ -31,30 +31,30 @@ class PitchEnergyPredictor(torch.nn.Module):
 
         dropout = pitch_energy_config.dropout
 
-        cross_channels = inter_dim + style_dim
-        self.query_norm = AdaptiveLayerNorm(style_dim, cross_channels)
-        self.key_norm = AdaptiveLayerNorm(style_dim, cross_channels)
-        self.cross_attention = MultiHeadAttention(
-            channels=cross_channels,
-            out_channels=cross_channels,
-            n_heads=8,
-            p_dropout=dropout,
-        )
-        self.cross_window = 5
-
-        self.cross_post = torch.nn.Sequential(
-            weight_norm(
-                torch.nn.Conv1d(
-                    cross_channels,
-                    cross_channels,
-                    kernel_size=5,
-                    padding=2,
-                    groups=cross_channels,
-                )
-            ),
-            torch.nn.SiLU(),
-            weight_norm(torch.nn.Conv1d(cross_channels, cross_channels, kernel_size=1)),
-        )
+        #         cross_channels = inter_dim + style_dim
+        #         self.query_norm = AdaptiveLayerNorm(style_dim, cross_channels)
+        #         self.key_norm = AdaptiveLayerNorm(style_dim, cross_channels)
+        #         self.cross_attention = MultiHeadAttention(
+        #             channels=cross_channels,
+        #             out_channels=cross_channels,
+        #             n_heads=8,
+        #             p_dropout=dropout,
+        #         )
+        #         self.cross_window = 5
+        #
+        #         self.cross_post = torch.nn.Sequential(
+        #             weight_norm(
+        #                 torch.nn.Conv1d(
+        #                     cross_channels,
+        #                     cross_channels,
+        #                     kernel_size=5,
+        #                     padding=2,
+        #                     groups=cross_channels,
+        #                 )
+        #             ),
+        #             torch.nn.SiLU(),
+        #             weight_norm(torch.nn.Conv1d(cross_channels, cross_channels, kernel_size=1)),
+        #         )
 
         self.F0 = torch.nn.ModuleList(
             [
@@ -63,8 +63,9 @@ class PitchEnergyPredictor(torch.nn.Module):
                     inter_dim + style_dim,
                     style_dim,
                     dropout_p=dropout,
+                    kernel_size=13,
                 )
-                for _ in range(3)
+                for _ in range(4)
             ]
         )
 
@@ -75,8 +76,9 @@ class PitchEnergyPredictor(torch.nn.Module):
                     inter_dim + style_dim,
                     style_dim,
                     dropout_p=dropout,
+                    kernel_size=13,
                 )
-                for _ in range(3)
+                for _ in range(4)
             ]
         )
 
@@ -108,20 +110,21 @@ class PitchEnergyPredictor(torch.nn.Module):
 
     def forward(self, texts, text_lengths, alignment, style):
         text_encoding, _, _ = self.text_encoder(texts, text_lengths)
-        mask = length_to_mask(text_lengths, text_encoding.shape[2]).to(
-            text_lengths.device
-        )
+        # mask = length_to_mask(text_lengths, text_encoding.shape[2]).to(
+        #     text_lengths.device
+        # )
         prosody = self.prosody_encoder(text_encoding, style, text_lengths)
-        x = self.compute_cross(prosody, alignment, style, mask)
+        prosody = torch.matmul(prosody.transpose(1, 2), alignment)
+        # x = self.compute_cross(prosody, alignment, style, mask)
 
-        F0 = x  # .transpose(1, 2)
+        F0 = prosody  # .transpose(1, 2)
         for block in self.F0:
             F0 = block(F0, style)
         voiced = self.voiced_proj(F0)
         voiced = self.sigmoid(voiced)
         F0 = self.F0_proj(F0)
 
-        N = x  # .transpose(1, 2)
+        N = prosody  # .transpose(1, 2)
         for block in self.N:
             N = block(N, style)
         N = self.N_proj(N)
