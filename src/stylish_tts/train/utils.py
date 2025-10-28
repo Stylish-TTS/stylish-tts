@@ -472,6 +472,8 @@ class DurationProcessor(torch.nn.Module):
 
         duration -- [t]ext length
         result -- [t]ext length x [a]udio length"""
+        # TODO: Remove hard-coding
+        duration = duration * 4
         total_dur = duration.sum(dim=1).round().max().long().item()
 
         upper_bound = torch.cumsum(duration, dim=1)

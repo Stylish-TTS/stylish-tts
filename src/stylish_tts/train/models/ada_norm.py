@@ -136,7 +136,7 @@ class AdaptiveInstance(nn.Module):
         h = self.fc(s)
         h = h.view(h.size(0), h.size(1), 1)
         gamma, beta = torch.chunk(h, chunks=2, dim=1)
-        torch._check(x.shape[2] != 1)
+        torch._check(x.shape[2] > 1)
         return (1 + gamma) * self.norm(x) + beta
 
 

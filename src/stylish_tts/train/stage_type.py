@@ -79,6 +79,12 @@ class AcousticStep:
                 train.normalization.mel_log_mean,
                 train.normalization.mel_log_std,
             )
+            self.style_mel, _ = calculate_mel(
+                batch.audio_gt,
+                train.to_style_mel,
+                train.normalization.mel_log_mean,
+                train.normalization.mel_log_std,
+            )
             self.energy = log_norm(
                 self.mel.unsqueeze(1),
                 train.normalization.mel_log_mean,
@@ -99,7 +105,7 @@ class AcousticStep:
                 batch.alignment[:, 0, :].long()
             )
         if use_predicted_pe:
-            self.pe_style = train.model.pe_style_encoder(self.mel.unsqueeze(1))
+            self.pe_style = train.model.pe_style_encoder(self.style_mel.unsqueeze(1))
             self.pred_pitch, self.pred_energy, self.pred_voiced = (
                 train.model.pitch_energy_predictor(
                     batch.text,
@@ -115,7 +121,9 @@ class AcousticStep:
             )
 
         if predict_audio:
-            self.speech_style = train.model.speech_style_encoder(self.mel.unsqueeze(1))
+            self.speech_style = train.model.speech_style_encoder(
+                self.style_mel.unsqueeze(1)
+            )
             if use_predicted_pe:
                 self.pred = train.model.speech_predictor(
                     batch.text,
@@ -442,16 +450,16 @@ stages["textual"] = StageType(
 def train_duration(
     batch, model, train, probing, disc_index
 ) -> Tuple[LossLog, Optional[torch.Tensor]]:
-    mel, _ = calculate_mel(
+    style_mel, _ = calculate_mel(
         batch.audio_gt,
-        train.to_mel,
+        train.to_style_mel,
         train.normalization.mel_log_mean,
         train.normalization.mel_log_std,
     )
 
     target_dur = batch.alignment[:, 0, :].long()
     targets = train.duration_processor.dur_to_class(target_dur)
-    duration_style = model.duration_style_encoder(mel.unsqueeze(1))
+    duration_style = model.duration_style_encoder(style_mel.unsqueeze(1))
     duration_raw = model.duration_predictor(
         batch.text, batch.text_length, duration_style
     )
@@ -516,6 +524,12 @@ def validate_duration(batch, train):
         train.normalization.mel_log_mean,
         train.normalization.mel_log_std,
     )
+    style_mel, _ = calculate_mel(
+        batch.audio_gt,
+        train.to_style_mel,
+        train.normalization.mel_log_mean,
+        train.normalization.mel_log_std,
+    )
     energy = log_norm(
         mel.unsqueeze(1),
         train.normalization.mel_log_mean,
@@ -525,7 +539,7 @@ def validate_duration(batch, train):
     voiced = (batch.pitch > 10).float()
     target_dur = batch.alignment[:, 0, :].long()
     targets = train.duration_processor.dur_to_class(target_dur)
-    duration_style = train.model.duration_style_encoder(mel.unsqueeze(1))
+    duration_style = train.model.duration_style_encoder(style_mel.unsqueeze(1))
     duration_raw = train.model.duration_predictor(
         batch.text, batch.text_length, duration_style
     )
@@ -534,8 +548,8 @@ def validate_duration(batch, train):
         duration_raw, batch.text_length
     )
 
-    pe_mel_style = train.model.pe_style_encoder(mel.unsqueeze(1))
-    speech_style = train.model.speech_style_encoder(mel.unsqueeze(1))
+    pe_mel_style = train.model.pe_style_encoder(style_mel.unsqueeze(1))
+    speech_style = train.model.speech_style_encoder(style_mel.unsqueeze(1))
 
     results = []
     duration_loss = 0

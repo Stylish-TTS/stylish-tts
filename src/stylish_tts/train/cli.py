@@ -361,11 +361,12 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
         exit("No normalization state found. Cannot generate voicepack.")
     sbert = SentenceTransformer("stsb-mpnet-base-v2")
 
+    # TODO: Remove hard-coded values
     to_mel = torchaudio.transforms.MelSpectrogram(
         n_mels=model_config.n_mels,
-        n_fft=model_config.n_fft,
-        win_length=model_config.win_length,
-        hop_length=model_config.hop_length,
+        n_fft=2048,
+        win_length=1200,
+        hop_length=300,
         sample_rate=model_config.sample_rate,
     ).to(config.training.device)
     text_cleaner = TextCleaner(model_config.symbol)

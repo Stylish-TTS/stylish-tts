@@ -40,6 +40,7 @@ class ExportModel(torch.nn.Module):
     ):  # , alignment):
         dur_pred = self.duration_predictor(texts, text_lengths, duration_style)
         alignment = self.duration_processor(dur_pred, text_lengths)
+        torch._check(alignment.shape[2] < 10000)
         pitch, energy, voiced = self.pitch_energy_predictor(
             texts, text_lengths, alignment, pe_style
         )

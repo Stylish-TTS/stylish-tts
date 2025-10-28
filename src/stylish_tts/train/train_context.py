@@ -152,6 +152,15 @@ class TrainContext:
             sample_rate=self.model_config.sample_rate,
         ).to(self.config.training.device)
 
+        # TODO: Remove hardcoded values
+        self.to_style_mel = torchaudio.transforms.MelSpectrogram(
+            n_mels=self.model_config.n_mels,
+            n_fft=2048,
+            win_length=1200,
+            hop_length=300,
+            sample_rate=self.model_config.sample_rate,
+        ).to(self.config.training.device)
+
         self.to_align_mel = torchaudio.transforms.MelSpectrogram(
             n_mels=80,  # align seems to perform worse on higher n_mels
             n_fft=self.model_config.n_fft,
