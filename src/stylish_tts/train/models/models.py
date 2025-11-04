@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def build_model(model_config: ModelConfig):
     text_aligner = tdnn_blstm_ctc_model_base(
-        model_config.n_mels, model_config.text_encoder.tokens
+        model_config.text_aligner.n_mels, model_config.text_encoder.tokens
     )
 
     duration_predictor = DurationPredictor(
@@ -45,22 +45,22 @@ def build_model(model_config: ModelConfig):
     )
 
     speech_style_encoder = MelStyleEncoder(
-        model_config.n_mels,
+        model_config.style_encoder.n_mels,
         model_config.style_dim,
-        model_config.mel_style_encoder.max_channels,
-        model_config.mel_style_encoder.skip_downsample,
+        model_config.style_encoder.max_channels,
+        model_config.style_encoder.skip_downsample,
     )
     pe_style_encoder = MelStyleEncoder(
-        model_config.n_mels,
+        model_config.style_encoder.n_mels,
         model_config.style_dim,
-        model_config.mel_style_encoder.max_channels,
-        model_config.mel_style_encoder.skip_downsample,
+        model_config.style_encoder.max_channels,
+        model_config.style_encoder.skip_downsample,
     )
     duration_style_encoder = MelStyleEncoder(
-        model_config.n_mels,
+        model_config.style_encoder.n_mels,
         model_config.style_dim,
-        model_config.mel_style_encoder.max_channels,
-        model_config.mel_style_encoder.skip_downsample,
+        model_config.style_encoder.max_channels,
+        model_config.style_encoder.skip_downsample,
     )
 
     nets = Munch(

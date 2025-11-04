@@ -128,7 +128,7 @@ class AcousticStep:
             voiced = self.voiced
             pitch = self.pitch
             energy = self.energy
-            if use_predicted_pe and not use_random:
+            if use_predicted_pe:
                 voiced = self.pred_voiced
                 pitch = self.pred_pitch
                 energy = self.pred_energy
@@ -315,7 +315,6 @@ def train_acoustic(
         log,
         use_predicted_pe=False,
         predict_audio=True,
-        use_random=True,
     )
     train.stage.optimizer.zero_grad()
 
