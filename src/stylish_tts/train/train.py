@@ -271,13 +271,6 @@ def train_model(
         train.manifest.best_loss = float("inf")  # best test loss
         torch_empty_cache(train.config.training.device)
         # save_checkpoint(train, prefix="checkpoint_test", long=False)
-        # from models.stft import STFT
-        # stft = STFT(
-        #     filter_length=train.model_config.generator.gen_istft_n_fft,
-        #     hop_length=train.model_config.generator.gen_istft_hop_size,
-        #     win_length=train.model_config.generator.gen_istft_n_fft,
-        # )
-        # train.model.speech_predictor.generator.stft = stft.to(train.config.training.device).eval()
         # train.stage.validate(train)
         # exit(0)
         if not train.stage.batch_sizes_exist():

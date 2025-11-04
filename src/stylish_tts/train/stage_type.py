@@ -68,8 +68,6 @@ class AcousticStep:
         *,
         use_predicted_pe,
         predict_audio,
-        use_random=False,
-        # use_knn_style=False,
     ):
         self.batch = batch
         self.train = train
@@ -98,10 +96,6 @@ class AcousticStep:
             # )
             self.pitch = batch.pitch
             self.voiced = (batch.pitch > 10).float()
-        # if use_knn_style:
-        #     indices = train.pe_knn.kneighbors(self.pe_style.cpu().numpy(), return_distance=False)
-        #     styles = torch.from_numpy(train.pe_style_array[indices]).to(self.pe_style.device)
-        #     self.pe_styles = styles.mean(dim=1)
 
         if alignment is None:
             alignment = train.duration_processor.duration_to_alignment(
@@ -138,14 +132,6 @@ class AcousticStep:
                 voiced = self.pred_voiced
                 pitch = self.pred_pitch
                 energy = self.pred_energy
-            # if use_random:
-            #     epoch = train.manifest.current_epoch - 1
-            #     if random.random() < 0.1 * epoch:
-            #         voiced = self.pred_voiced
-            #     weight = torch.normal(mean=0.1 * epoch, std=0.5, size=(pitch.shape[0], 1))
-            #     weight = torch.clamp(weight, min=0, max=1).to(self.pitch.device)
-            #     pitch = self.pred_pitch * weight + self.pitch * (1 - weight)
-            #     energy = self.pred_energy * weight + self.energy * (1 - weight)
             self.pred = train.model.speech_predictor(
                 batch.text,
                 batch.text_length,
@@ -227,7 +213,6 @@ class AcousticStep:
         prediction = torch.complex(self.pred_pitch, self.pred_energy * 50)
         self.log.add_loss(
             "pitch",
-            # torch.nn.functional.smooth_l1_loss(self.pitch, self.pred_pitch),
             torch.nn.functional.l1_loss(target, prediction),
         )
 
@@ -235,12 +220,6 @@ class AcousticStep:
         self.log.add_loss(
             "voiced",
             torch.nn.functional.binary_cross_entropy(self.pred_voiced, self.voiced),
-        )
-
-    def energy_loss(self):
-        self.log.add_loss(
-            "energy",
-            torch.nn.functional.smooth_l1_loss(self.energy, self.pred_energy),
         )
 
 
@@ -335,7 +314,6 @@ def train_acoustic(
         train,
         log,
         use_predicted_pe=False,
-        # use_predicted_pe=True,
         predict_audio=True,
         use_random=True,
     )
@@ -360,7 +338,6 @@ def validate_acoustic(batch, train):
         train,
         log,
         use_predicted_pe=False,
-        # use_predicted_pe=True,
         predict_audio=True,
     )
 
@@ -371,17 +348,13 @@ def validate_acoustic(batch, train):
 
 stages["acoustic"] = StageType(
     next_stage="textual",
-    # next_stage=None,
     train_fn=train_acoustic,
     validate_fn=validate_acoustic,
     train_models=[
         "speech_predictor",
         "speech_style_encoder",
     ],
-    eval_models=[
-        # "pitch_energy_predictor",
-        # "pe_style_encoder",
-    ],
+    eval_models=[],
     discriminators=["mrd0", "mrd1", "mrd2"],
     inputs=[
         "text",
@@ -415,7 +388,6 @@ def train_textual(
 
     train.accelerator.backward(log.backwards_loss())
     return log.detach(), detach_all([step.pitchcat]), detach_all([step.pred_pitchcat])
-    # detach_all(step.target_fft), detach_all(step.pred_fft)
 
 
 @torch.no_grad()
@@ -510,7 +482,7 @@ def train_duration(
     )
 
     log.add_loss("duration_ce", loss_ce)
-    log.add_loss("duration", duration_loss)  # loss_cdw)
+    log.add_loss("duration", duration_loss)
     train.accelerator.backward(log.backwards_loss())
 
     return log.detach(), detach_all([target_disc]), detach_all([pred_disc])
