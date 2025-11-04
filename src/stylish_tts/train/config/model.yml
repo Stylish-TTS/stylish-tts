@@ -62,7 +62,7 @@ duration_predictor:
   last_dropout: 0.5
 
 pitch_energy_predictor:
-  inter_dim: 512
+  inter_dim: 256
   dropout: 0.2
 
 # speech language model config

@@ -16,6 +16,7 @@ from stylish_tts.train.utils import DecoderPrediction
 from .ada_norm import AdaptiveGeneratorBlock
 from .ada_norm import AdaptiveLayerNorm
 from .common import get_padding
+from .conv_next import GeneratorConvNeXtBlock
 
 import numpy as np
 
@@ -565,7 +566,7 @@ class Generator(torch.nn.Module):
         )
         self.phase_convnext = nn.ModuleList(
             [
-                ConvNeXtBlock(
+                GeneratorConvNeXtBlock(
                     dim=config.hidden_dim,
                     intermediate_dim=config.conv_intermediate_dim,
                     style_dim=style_dim,
@@ -583,7 +584,7 @@ class Generator(torch.nn.Module):
         )
         self.amp_convnext = nn.ModuleList(
             [
-                ConvNeXtBlock(
+                GeneratorConvNeXtBlock(
                     dim=config.hidden_dim,
                     intermediate_dim=config.conv_intermediate_dim,
                     style_dim=style_dim,
@@ -594,7 +595,12 @@ class Generator(torch.nn.Module):
         self.amp_final_layer_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
         self.phase_final_layer_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
         self.apply(self._init_weights)
-        self.stft = TorchSTFT(
+        # self.stft = TorchSTFT(
+        #     filter_length=n_fft,
+        #     hop_length=hop_length,
+        #     win_length=win_length,
+        # )
+        self.stft = STFT(
             filter_length=n_fft,
             hop_length=hop_length,
             win_length=win_length,
@@ -665,59 +671,6 @@ class Generator(torch.nn.Module):
             magnitude=logamp,
             phase=phase,
         )
-
-
-class ConvNeXtBlock(torch.nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        intermediate_dim: int,
-        style_dim,
-    ):
-        super().__init__()
-        self.dwconv = torch.nn.Conv1d(
-            dim, dim, kernel_size=7, padding=3, groups=dim
-        )  # depthwise conv
-
-        self.norm = AdaptiveLayerNorm(style_dim, dim, eps=1e-6)
-        self.pwconv1 = torch.nn.Linear(
-            dim, intermediate_dim
-        )  # pointwise/1x1 convs, implemented with linear layers
-        self.snake = torch.nn.Parameter(torch.ones(1, 1, intermediate_dim))
-        self.grn = GRN(intermediate_dim)
-        self.pwconv2 = torch.nn.Linear(intermediate_dim, dim)
-
-    def act(self, x):
-        return x + (1 / self.snake) * (torch.sin(self.snake * x) ** 2)
-
-    def forward(self, x, style):
-        residual = x
-        x = self.dwconv(x)
-        x = x.transpose(1, 2)  # (B, C, T) -> (B, T, C)
-        x = self.norm(x, style)
-        x = self.pwconv1(x)
-        x = self.act(x)
-        x = self.grn(x)
-        x = self.pwconv2(x)
-
-        x = x.transpose(1, 2)  # (B, T, C) -> (B, C, T)
-
-        x = residual + x
-        return x
-
-
-class GRN(torch.nn.Module):
-    """GRN (Global Response Normalization) layer"""
-
-    def __init__(self, dim):
-        super().__init__()
-        self.gamma = torch.nn.Parameter(torch.zeros(1, 1, dim))
-        self.beta = torch.nn.Parameter(torch.zeros(1, 1, dim))
-
-    def forward(self, x):
-        Gx = torch.norm(x, p=2, dim=1, keepdim=True)
-        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
-        return self.gamma * (x * Nx) + self.beta + x
 
 
 def generate_pcph(

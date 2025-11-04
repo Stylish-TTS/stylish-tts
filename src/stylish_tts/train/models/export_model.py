@@ -39,7 +39,9 @@ class ExportModel(torch.nn.Module):
         self, texts, text_lengths, speech_style, pe_style, duration_style
     ):  # , alignment):
         dur_pred = self.duration_predictor(texts, text_lengths, duration_style)
+        # TODO: Remove hard-coded value
         alignment = self.duration_processor(dur_pred, text_lengths)
+        alignment4 = self.duration_processor(dur_pred, text_lengths, multiplier=4)
         torch._check(alignment.shape[2] < 10000)
         pitch, energy, voiced = self.pitch_energy_predictor(
             texts, text_lengths, alignment, pe_style
@@ -47,12 +49,13 @@ class ExportModel(torch.nn.Module):
         prediction = self.speech_predictor(
             texts,
             text_lengths,
-            alignment,
+            alignment4,
             pitch,
             energy,
             voiced.round(),
             speech_style,
-            denormalize_pitch(pitch, self.pitch_log2_mean, self.pitch_log2_std),
+            pitch,
+            # denormalize_pitch(pitch, self.pitch_log2_mean, self.pitch_log2_std),
         )
         audio = rearrange(prediction.audio, "1 1 l -> l")
         return audio

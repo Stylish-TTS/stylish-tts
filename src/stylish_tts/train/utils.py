@@ -73,8 +73,8 @@ def log_norm(x, mean, std, dim=2):
     """
     normalized log mel -> mel -> norm -> log(norm)
     """
-    # x = torch.log(torch.exp(x * std + mean).norm(dim=dim))
-    x = (torch.exp(x * std + mean) ** 0.33).sum(dim=dim)
+    x = torch.log(torch.exp(x * std + mean).norm(dim=dim))
+    # x = (torch.exp(x * std + mean) ** 0.33).sum(dim=dim)
     return x
 
 
@@ -467,14 +467,16 @@ class DurationProcessor(torch.nn.Module):
         dur = softdur * mask
         return dur
 
-    def duration_to_alignment(self, duration: torch.Tensor) -> torch.Tensor:
+    def duration_to_alignment(
+        self, duration: torch.Tensor, multiplier=1
+    ) -> torch.Tensor:
         """Convert a sequence of duration values to an attention matrix.
 
         duration -- [t]ext length
         result -- [t]ext length x [a]udio length"""
-        # TODO: Remove hard-coding
-        duration = duration * 4
         total_dur = duration.sum(dim=1).round().max().long().item()
+        total_dur = total_dur * multiplier
+        duration = duration * multiplier
 
         upper_bound = torch.cumsum(duration, dim=1)
         lower_bound = upper_bound - duration
@@ -517,9 +519,9 @@ class DurationProcessor(torch.nn.Module):
     #     result[indices, torch.arange(indices.shape[0])] = 1
     #     return result
 
-    def forward(self, pred, text_length):
+    def forward(self, pred, text_length, multiplier=1):
         duration = self.prediction_to_duration(pred, text_length)
-        alignment = self.duration_to_alignment(duration)
+        alignment = self.duration_to_alignment(duration, multiplier)
         return alignment
 
 

@@ -9,6 +9,7 @@ from .ada_norm import AdaptiveLayerNorm
 from ..utils import sequence_mask, length_to_mask
 from torch.nn.utils.parametrizations import weight_norm
 from .text_encoder import MultiHeadAttention
+from .conv_next import AdaptiveConvNeXtBlock
 
 
 class DurationPredictor(torch.nn.Module):
@@ -17,10 +18,11 @@ class DurationPredictor(torch.nn.Module):
         self.text_encoder = TextEncoder(inter_dim=inter_dim, config=text_config)
         self.conv_next = torch.nn.ModuleList(
             [
-                ConvNeXtBlock(
+                AdaptiveConvNeXtBlock(
                     dim=inter_dim,
                     intermediate_dim=inter_dim * 4,
                     style_dim=style_dim,
+                    dropout=0.5,
                 )
                 for _ in range(duration_config.n_layer)
             ]
@@ -85,53 +87,3 @@ class DurationPredictor(torch.nn.Module):
         duration = -torch.abs(duration)
         duration = duration * mask.transpose(1, 2)
         return duration
-
-
-class ConvNeXtBlock(torch.nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        intermediate_dim: int,
-        style_dim,
-    ):
-        super().__init__()
-        self.dwconv = torch.nn.Conv1d(
-            dim, dim, kernel_size=7, padding=3, groups=dim
-        )  # depthwise conv
-
-        self.norm = AdaptiveLayerNorm(style_dim, dim, eps=1e-6)
-        self.pwconv1 = torch.nn.Linear(
-            dim, intermediate_dim
-        )  # pointwise/1x1 convs, implemented with linear layers
-        self.act = torch.nn.GELU()
-        self.grn = GRN(intermediate_dim)
-        self.pwconv2 = torch.nn.Linear(intermediate_dim, dim)
-
-    def forward(self, x, style):
-        residual = x
-        x = self.dwconv(x)
-        x = x.transpose(1, 2)  # (B, C, T) -> (B, T, C)
-        x = self.norm(x, style)
-        x = self.pwconv1(x)
-        x = self.act(x)
-        x = self.grn(x)
-        x = self.pwconv2(x)
-
-        x = x.transpose(1, 2)  # (B, T, C) -> (B, C, T)
-
-        x = residual + x
-        return x
-
-
-class GRN(torch.nn.Module):
-    """GRN (Global Response Normalization) layer"""
-
-    def __init__(self, dim):
-        super().__init__()
-        self.gamma = torch.nn.Parameter(torch.zeros(1, 1, dim))
-        self.beta = torch.nn.Parameter(torch.zeros(1, 1, dim))
-
-    def forward(self, x):
-        Gx = torch.norm(x, p=2, dim=1, keepdim=True)
-        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
-        return self.gamma * (x * Nx) + self.beta + x

@@ -37,12 +37,12 @@ def convert_to_onnx(
         pitch_log2_mean=float(metadata["pitch_log2_mean"]),
         pitch_log2_std=float(metadata["pitch_log2_std"]),
     ).eval()
-    stft = STFT(
-        filter_length=model_config.n_fft,
-        hop_length=model_config.hop_length,
-        win_length=model_config.win_length,
-    )
-    model.speech_predictor.generator.stft = stft.to(device).eval()
+    # stft = STFT(
+    #     filter_length=model_config.n_fft,
+    #     hop_length=model_config.hop_length,
+    #     win_length=model_config.win_length,
+    # )
+    # model.speech_predictor.generator.stft = stft.to(device).eval()
     duration_predictor = model_in.duration_predictor.eval()
 
     tokens = (

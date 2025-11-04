@@ -362,7 +362,7 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
     sbert = SentenceTransformer("stsb-mpnet-base-v2")
 
     # TODO: Remove hard-coded values
-    to_mel = torchaudio.transforms.MelSpectrogram(
+    to_style_mel = torchaudio.transforms.MelSpectrogram(
         n_mels=model_config.n_mels,
         n_fft=2048,
         win_length=1200,
@@ -428,12 +428,12 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
             path = batch[3][0]
             wave = batch[0].to(device)
             length = batch[2][0].to(device)
-            mel, _ = calculate_mel(
-                wave, to_mel, state.norm.mel_log_mean, state.norm.mel_log_std
+            style_mel, _ = calculate_mel(
+                wave, to_style_mel, state.norm.mel_log_mean, state.norm.mel_log_std
             )
-            speech_style = state.model.speech_style_encoder(mel.unsqueeze(1))
-            pe_style = state.model.pe_style_encoder(mel.unsqueeze(1))
-            duration_style = state.model.duration_style_encoder(mel.unsqueeze(1))
+            speech_style = state.model.speech_style_encoder(style_mel.unsqueeze(1))
+            pe_style = state.model.pe_style_encoder(style_mel.unsqueeze(1))
+            duration_style = state.model.duration_style_encoder(style_mel.unsqueeze(1))
 
             embedding = torch.from_numpy(path_to_embedding[path]).to(device)
             combined = torch.cat(
