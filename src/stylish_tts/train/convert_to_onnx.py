@@ -36,6 +36,7 @@ def convert_to_onnx(
         max_dur=duration_processor.max_dur,
         pitch_log2_mean=float(metadata["pitch_log2_mean"]),
         pitch_log2_std=float(metadata["pitch_log2_std"]),
+        coarse_multiplier=model_config.coarse_multiplier,
     ).eval()
     # stft = STFT(
     #     filter_length=model_config.n_fft,

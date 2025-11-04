@@ -101,9 +101,9 @@ class AcousticStep:
             alignment = train.duration_processor.duration_to_alignment(
                 batch.alignment[:, 0, :].long()
             )
-            # TODO: Remove hard-coded value
-            alignment4 = train.duration_processor.duration_to_alignment(
-                batch.alignment[:, 0, :].long(), multiplier=4
+            alignment_fine = train.duration_processor.duration_to_alignment(
+                batch.alignment[:, 0, :].long(),
+                multiplier=train.model_config.coarse_multiplier,
             )
         if use_predicted_pe:
             self.pe_style = train.model.pe_style_encoder(self.style_mel.unsqueeze(1))
@@ -135,7 +135,7 @@ class AcousticStep:
             self.pred = train.model.speech_predictor(
                 batch.text,
                 batch.text_length,
-                alignment4,
+                alignment_fine,
                 pitch,
                 energy,
                 voiced.round(),
@@ -518,9 +518,8 @@ def validate_duration(batch, train):
         )
 
         alignment = train.duration_processor.duration_to_alignment(duration[i : i + 1])
-        # TODO: Remove hard-coded value
-        alignment4 = train.duration_processor.duration_to_alignment(
-            duration[i : i + 1], multiplier=4
+        alignment_fine = train.duration_processor.duration_to_alignment(
+            duration[i : i + 1], multiplier=train.model_config.coarse_multiplier
         )
         pred_pitch, pred_energy, pred_voiced = train.model.pitch_energy_predictor(
             batch.text[i : i + 1, : batch.text_length[i]],
@@ -531,7 +530,7 @@ def validate_duration(batch, train):
         pred = train.model.speech_predictor(
             batch.text[i : i + 1, : batch.text_length[i]],
             batch.text_length[i : i + 1],
-            alignment4[:, : batch.text_length[i], :],
+            alignment_fine[:, : batch.text_length[i], :],
             pred_pitch,
             pred_energy,
             pred_voiced,

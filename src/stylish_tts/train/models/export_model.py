@@ -15,6 +15,7 @@ class ExportModel(torch.nn.Module):
         max_dur,
         pitch_log2_mean,
         pitch_log2_std,
+        coarse_multiplier,
         **kwargs,
     ):
         super(ExportModel, self).__init__()
@@ -34,14 +35,14 @@ class ExportModel(torch.nn.Module):
         self.pitch_energy_predictor = pitch_energy_predictor
         self.pitch_log2_mean = pitch_log2_mean
         self.pitch_log2_std = pitch_log2_std
+        self.coarse_multiplier = coarse_multiplier
 
-    def forward(
-        self, texts, text_lengths, speech_style, pe_style, duration_style
-    ):  # , alignment):
+    def forward(self, texts, text_lengths, speech_style, pe_style, duration_style):
         dur_pred = self.duration_predictor(texts, text_lengths, duration_style)
-        # TODO: Remove hard-coded value
         alignment = self.duration_processor(dur_pred, text_lengths)
-        alignment4 = self.duration_processor(dur_pred, text_lengths, multiplier=4)
+        alignment_fine = self.duration_processor(
+            dur_pred, text_lengths, multiplier=self.coarse_multiplier
+        )
         torch._check(alignment.shape[2] < 10000)
         pitch, energy, voiced = self.pitch_energy_predictor(
             texts, text_lengths, alignment, pe_style
@@ -49,7 +50,7 @@ class ExportModel(torch.nn.Module):
         prediction = self.speech_predictor(
             texts,
             text_lengths,
-            alignment4,
+            alignment_fine,
             pitch,
             energy,
             voiced.round(),

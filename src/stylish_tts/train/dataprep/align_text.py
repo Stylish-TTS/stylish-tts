@@ -369,6 +369,7 @@ def soft_alignment_bad(pred, phonemes):
 
 
 def audio_list(path, wavdir, model_config):
+    coarse_hop_length = model_config.hop_length * model_config.coarse_multiplier
     with path.open("r") as f:
         for line in f:
             fields = line.split("|")
@@ -379,13 +380,15 @@ def audio_list(path, wavdir, model_config):
                 sys.stderr.write(f"Skipping {name}: Wrong sample rate ({sr})")
             if wave.shape[-1] == 2:
                 wave = wave[:, 0].squeeze()
-            time_bin = get_time_bin(wave.shape[0], model_config.hop_length)
+            time_bin = get_time_bin(
+                wave.shape[0], model_config.hop_length * model_config.coarse_multiplier
+            )
             if time_bin == -1:
                 sys.stderr.write(f"Skipping {name}: Too short\n")
                 continue
             frame_count = get_frame_count(time_bin)
-            pad_start = (frame_count * 300 - wave.shape[0]) // 2
-            pad_end = frame_count * 300 - wave.shape[0] - pad_start
+            pad_start = (frame_count * coarse_hop_length - wave.shape[0]) // 2
+            pad_end = frame_count * coarse_hop_length - wave.shape[0] - pad_start
             wave = numpy.concatenate(
                 [numpy.zeros([pad_start]), wave, numpy.zeros([pad_end])], axis=0
             )

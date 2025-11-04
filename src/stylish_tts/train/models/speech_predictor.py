@@ -40,6 +40,7 @@ class SpeechPredictor(torch.nn.Module):
             n_fft=model_config.n_fft,
             win_length=model_config.win_length,
             hop_length=model_config.hop_length,
+            sample_rate=model_config.sample_rate,
             config=model_config.generator,
         )
 

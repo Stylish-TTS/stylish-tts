@@ -29,8 +29,6 @@ class DurationPredictor(torch.nn.Module):
         )
         self.dropout = torch.nn.Dropout1d(duration_config.last_dropout)
         self.duration_proj = LinearNorm(inter_dim, duration_config.duration_classes)
-        # TODO: Remove this vestigial layer
-        self.coefficient_proj = LinearNorm(inter_dim, 5)
 
         cross_channels = inter_dim
         self.query_norm = AdaptiveLayerNorm(style_dim, cross_channels)

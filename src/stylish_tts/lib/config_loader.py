@@ -167,6 +167,10 @@ class TextAlignerConfig(BaseModel):
     Configuration for the text aligner component.
     """
 
+    n_mels: int = Field(..., description="Number of mel bins for text aligner")
+    n_fft: int = Field(..., description="Number of fft bins for text aligner")
+    win_length: int = Field(..., description="Window length for text aligner")
+    hop_length: int = Field(..., description="Hop length for text aligner")
     hidden_dim: int = Field(
         ..., description="Dimension of the hidden layers in the text aligner."
     )
@@ -260,25 +264,21 @@ class TextEncoderConfig(BaseModel):
     dropout: float = Field(..., description="Dropout for internal layers")
 
 
-class MelStyleEncoderConfig(BaseModel):
+class StyleEncoderConfig(BaseModel):
     """
     Style encoder configuration parameters.
     """
 
+    n_mels: int = Field(..., description="Number of mel bins for style encoders")
+    n_fft: int = Field(..., description="Number of fft bins for style encoders")
+    win_length: int = Field(..., description="Window length for style encoders")
+    hop_length: int = Field(..., description="Hop length for style encoders")
     max_channels: int = Field(
         ..., description="Maximum number of channels during downsampling"
     )
     skip_downsample: bool = Field(
         ..., description="Skip one of the downsample layers to allow smaller mel length"
     )
-
-
-class StyleEncoderConfig(BaseModel):
-    """
-    Style encoder configuration parameters.
-    """
-
-    layers: int = Field(..., description="Number of convnext blocks to use")
 
 
 class DurationPredictorConfig(BaseModel):
@@ -356,6 +356,10 @@ class ModelConfig(BaseModel):
         ..., description="Window length for spectrogram computation."
     )
     hop_length: int = Field(..., description="Hop length for spectrogram computation.")
+    coarse_multiplier: int = Field(
+        ...,
+        description="Multiplier for hop length for coarse-grained prediction (alignment, p/e prediction)",
+    )
     style_dim: int = Field(..., description="Dimension of the style vector.")
     inter_dim: int = Field(
         ..., description="Dimension of the embedding used between models."
@@ -371,11 +375,8 @@ class ModelConfig(BaseModel):
     text_encoder: TextEncoderConfig = Field(
         ..., description="Text encoder configuration parameters."
     )
-    mel_style_encoder: MelStyleEncoderConfig = Field(
-        ..., description="Acoustic style encoder configuration parameters."
-    )
     style_encoder: StyleEncoderConfig = Field(
-        ..., description="Style encoder configuration parameters."
+        ..., description="Acoustic style encoder configuration parameters."
     )
     duration_predictor: DurationPredictorConfig = Field(
         ..., description="Duration predictor configuration parameters."

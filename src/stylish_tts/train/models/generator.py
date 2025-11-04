@@ -497,14 +497,15 @@ class SourceModuleHnNSF(torch.nn.Module):
 
 
 class Generator(torch.nn.Module):
-    def __init__(self, *, style_dim, n_fft, win_length, hop_length, config):
+    def __init__(
+        self, *, style_dim, n_fft, win_length, hop_length, sample_rate, config
+    ):
         super(Generator, self).__init__()
 
         self.prior_generator = partial(
             generate_pcph,
             hop_length=hop_length,
-            # TODO: Remove hardcoded value
-            sample_rate=24000,
+            sample_rate=sample_rate,
         )
 
         self.amp_prior_conv = Conv1d(

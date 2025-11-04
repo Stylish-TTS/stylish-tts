@@ -64,7 +64,9 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.root_path = root_path
         self.multispeaker = model_config.multispeaker
         self.sample_rate = model_config.sample_rate
-        self.hop_length = model_config.hop_length
+        self.coarse_hop_length = (
+            model_config.hop_length * model_config.coarse_multiplier
+        )
 
     def time_bins(self):
         sample_lengths = []
@@ -94,7 +96,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         logger.info(f"Total segment lengths: {total_audio_length / 3600.0:.2f}h")
         for i in range(len(sample_lengths)):
             phonemes = self.data_list[i][1]
-            bin_num = get_time_bin(sample_lengths[i], self.hop_length)
+            bin_num = get_time_bin(sample_lengths[i], self.coarse_hop_length)
             if get_frame_count(bin_num) < len(phonemes):
                 exit(
                     f"Segment audio is too short for the number of phonemes. Remove it from the dataset: {self.data_list[i][0]}"
@@ -163,13 +165,11 @@ class FilePathDataset(torch.utils.data.Dataset):
 
         pad_start = 5000
         pad_end = 5000
-        time_bin = get_time_bin(wave.shape[0], self.hop_length)
+        time_bin = get_time_bin(wave.shape[0], self.coarse_hop_length)
         if time_bin != -1:
             frame_count = get_frame_count(time_bin)
-            # pad_start = (frame_count * self.hop_length - wave.shape[0]) // 2
-            # pad_end = frame_count * self.hop_length - wave.shape[0] - pad_start
-            pad_start = (frame_count * 300 - wave.shape[0]) // 2
-            pad_end = frame_count * 300 - wave.shape[0] - pad_start
+            pad_start = (frame_count * self.coarse_hop_length - wave.shape[0]) // 2
+            pad_end = frame_count * self.coarse_hop_length - wave.shape[0] - pad_start
         wave = np.concatenate(
             [np.zeros([pad_start]), wave, np.zeros([pad_end])], axis=0
         )
@@ -424,15 +424,14 @@ def get_frame_count(i):
     return i * 20 + 20 + 40
 
 
-# TODO: More badness. Make it hop_length again
-def get_time_bin(sample_count, hop_length):
+def get_time_bin(sample_count, coarse_hop_length):
     result = -1
-    frames = sample_count // 300  # hop_length
+    frames = sample_count // coarse_hop_length
     if frames >= 20:
         result = (frames - 20) // 20
     return result
 
 
-def get_padded_time_bin(sample_count, hop_length):
-    frames = sample_count // 300  # hop_length
+def get_padded_time_bin(sample_count, coarse_hop_length):
+    frames = sample_count // coarse_hop_length
     return (frames - 60) // 20

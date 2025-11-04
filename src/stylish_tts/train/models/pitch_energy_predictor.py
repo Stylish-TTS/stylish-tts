@@ -14,11 +14,13 @@ class PitchEnergyPredictor(torch.nn.Module):
         self,
         style_dim,
         inter_dim,
+        coarse_multiplier,
         text_config,
         duration_config,
         pitch_energy_config,
     ):
         super().__init__()
+        self.coarse_multiplier = coarse_multiplier
         self.text_encoder = TextEncoder(
             inter_dim=inter_dim,
             config=text_config,
@@ -143,7 +145,9 @@ class PitchEnergyPredictor(torch.nn.Module):
         F0 = x
         for block in self.F0:
             F0 = block(F0, style)
-        F0 = torch.nn.functional.interpolate(F0, scale_factor=4, mode="linear")
+        F0 = torch.nn.functional.interpolate(
+            F0, scale_factor=self.coarse_multiplier, mode="linear"
+        )
         for block in self.F0_post:
             F0 = block(F0, style)
         voiced = self.voiced_proj(F0)
@@ -153,7 +157,9 @@ class PitchEnergyPredictor(torch.nn.Module):
         N = x
         for block in self.N:
             N = block(N, style)
-        N = torch.nn.functional.interpolate(N, scale_factor=4, mode="linear")
+        N = torch.nn.functional.interpolate(
+            N, scale_factor=self.coarse_multiplier, mode="linear"
+        )
         for block in self.N_post:
             N = block(N, style)
         N = self.N_proj(N)
