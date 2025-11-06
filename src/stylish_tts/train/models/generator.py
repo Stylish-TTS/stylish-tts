@@ -712,6 +712,7 @@ def generate_pcph(
 
     # vuv = f0 > 10.0
     vuv = voiced.round().bool()
+    f0 = f0 * vuv
     # min_f0_value = torch.min(f0[f0 > 20]).item()
     max_frequency = max_frequency if max_frequency is not None else sample_rate / 2
     max_n_harmonics = 16  # min(16, int(max_frequency / min_f0_value))

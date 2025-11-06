@@ -13,8 +13,8 @@ from stylish_tts.train.utils import (
     length_to_mask,
     leaky_clamp,
     calculate_mel,
-    normalize_pitch,
-    denormalize_pitch,
+    normalize_log2,
+    denormalize_log2,
 )
 from typing import List
 from stylish_tts.train.losses import multi_phase_loss
@@ -85,15 +85,19 @@ class AcousticStep:
                 train.normalization.mel_log_mean,
                 train.normalization.mel_log_std,
             )
-            self.energy = log_norm(
+            energy = log_norm(
                 self.mel.unsqueeze(1),
                 train.normalization.mel_log_mean,
                 train.normalization.mel_log_std,
             ).squeeze(1)
-            self.base_pitch = batch.pitch
-            # self.pitch = normalize_pitch(
-            #     batch.pitch, train.f0_log2_mean, train.f0_log2_std
-            # )
+            self.energy = normalize_log2(
+                energy,
+                train.normalization.energy_log2_mean,
+                train.normalization.energy_log2_std,
+            )
+            self.pitch = normalize_log2(
+                batch.pitch, train.f0_log2_mean, train.f0_log2_std
+            )
             self.pitch = batch.pitch
             self.voiced = (batch.pitch > 10).float()
 
@@ -128,10 +132,14 @@ class AcousticStep:
             voiced = self.voiced
             pitch = self.pitch
             energy = self.energy
+            base_pitch = batch.pitch
             if use_predicted_pe:
                 voiced = self.pred_voiced
                 pitch = self.pred_pitch
                 energy = self.pred_energy
+                base_pitch = denormalize_log2(
+                    self.pred_pitch, train.f0_log2_mean, train.f0_log2_std
+                )
             self.pred = train.model.speech_predictor(
                 batch.text,
                 batch.text_length,
@@ -140,10 +148,7 @@ class AcousticStep:
                 energy,
                 voiced.round(),
                 self.speech_style,
-                pitch,
-                # denormalize_pitch(
-                #     self.pred_pitch, train.f0_log2_mean, train.f0_log2_std
-                # ),
+                base_pitch,
             )
             (
                 self.target_spec,
@@ -209,8 +214,8 @@ class AcousticStep:
         self.train.magphase_loss(self.pred, self.batch.audio_gt, self.log)
 
     def pitch_loss(self):
-        target = torch.complex(self.pitch, self.energy * 50)
-        prediction = torch.complex(self.pred_pitch, self.pred_energy * 50)
+        target = torch.complex(self.pitch, self.energy)
+        prediction = torch.complex(self.pred_pitch, self.pred_energy)
         self.log.add_loss(
             "pitch",
             torch.nn.functional.l1_loss(target, prediction),
@@ -534,8 +539,7 @@ def validate_duration(batch, train):
             pred_energy,
             pred_voiced,
             speech_style[i : i + 1],
-            pred_pitch,
-            # denormalize_pitch(pred_pitch, train.f0_log2_mean, train.f0_log2_std),
+            denormalize_log2(pred_pitch, train.f0_log2_mean, train.f0_log2_std),
         )
         audio = rearrange(pred.audio, "1 1 l -> l")
         results.append(audio)

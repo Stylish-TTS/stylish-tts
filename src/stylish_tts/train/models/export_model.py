@@ -1,6 +1,6 @@
 import torch
 from einops import rearrange
-from stylish_tts.train.utils import DurationProcessor, denormalize_pitch
+from stylish_tts.train.utils import DurationProcessor, denormalize_log2
 
 
 class ExportModel(torch.nn.Module):
@@ -55,8 +55,7 @@ class ExportModel(torch.nn.Module):
             energy,
             voiced.round(),
             speech_style,
-            pitch,
-            # denormalize_pitch(pitch, self.pitch_log2_mean, self.pitch_log2_std),
+            denormalize_pitch(pitch, self.pitch_log2_mean, self.pitch_log2_std),
         )
         audio = rearrange(prediction.audio, "1 1 l -> l")
         return audio

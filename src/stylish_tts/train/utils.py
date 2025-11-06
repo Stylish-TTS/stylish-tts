@@ -73,9 +73,15 @@ def log_norm(x, mean, std, dim=2):
     """
     normalized log mel -> mel -> norm -> log(norm)
     """
-    x = torch.log(torch.exp(x * std + mean).norm(dim=dim))
+    # Denormalize
+    x = torch.exp(x * std + mean)
+    x = raw_energy(x)
     # x = (torch.exp(x * std + mean) ** 0.33).sum(dim=dim)
     return x
+
+
+def raw_energy(x):
+    return torch.log2(x.norm(dim=2))
 
 
 @torch.no_grad()
@@ -94,11 +100,15 @@ def compute_log_mel_stats(
         sample_rate: Target sample rate
 
     Returns:
-        (mean, std, total_frames)
+        (mean, std, energy_mean, energy_std, total_frames)
     """
     import os.path as osp
     import soundfile as sf
     import librosa
+
+    energy_count = 0
+    energy_x = torch.zeros((), dtype=torch.float64)
+    energy_x2 = torch.zeros((), dtype=torch.float64)
 
     count = 0
     sum_x = torch.zeros((), dtype=torch.float64)
@@ -136,8 +146,21 @@ def compute_log_mel_stats(
         sum_x += log_mel.sum(dtype=torch.float64).cpu()
         sum_x2 += (log_mel * log_mel).sum(dtype=torch.float64).cpu()
 
+        energy_mel = raw_energy(mel.unsqueeze(1))
+        energy_count += int(energy_mel.numel())
+        energy_x += energy_mel.sum(dtype=torch.float64).cpu()
+        energy_x2 += (energy_mel * energy_mel).sum(dtype=torch.float64).cpu()
+
+    mean, std = calc_mean_std(sum_x, sum_x2, count)
+    energy_mean, energy_std = calc_mean_std(energy_x, energy_x2, energy_count)
+
+    to_mel.to(mel_device)
+    return mean, std, energy_mean, energy_std, count
+
+
+def calc_mean_std(sum_x, sum_x2, count):
     if count == 0:
-        return -4.0, 4.0, 0
+        return -4.0, 4.0
     mean = sum_x / count
     if count > 1:
         var = (sum_x2 - count * mean * mean) / (count - 1)
@@ -145,8 +168,7 @@ def compute_log_mel_stats(
         var = torch.tensor(16.0, dtype=torch.float64)
     std = torch.sqrt(torch.clamp(var, min=1e-12))
 
-    to_mel.to(mel_device)
-    return float(mean.item()), float(std.item()), int(count)
+    return float(mean.item()), float(std.item())
 
 
 def plot_spectrogram_to_figure(
@@ -552,43 +574,24 @@ def calculate_mel(audio, to_mel, mean, std):
     return mel, mel_length
 
 
-def normalize_pitch(f0, log_f0_mean, log_f0_std):
+def normalize_log2(f0, log_f0_mean, log_f0_std):
     """
     Normalizes f0 using pre-calculated log-scale z-score statistics.
     """
 
-    voiced = f0 > 10
-
-    # Use torch or numpy log2 based on input type
     log_f0 = torch.log2(f0 + 1e-8)
-
-    # Standardize using the calculated stats
     normed_f0 = (log_f0 - log_f0_mean) / log_f0_std
-
-    # Set unvoiced parts to 0 (which now represents the mean of the normed space)
-    normed_f0 = normed_f0 * voiced
     return normed_f0
 
 
-def denormalize_pitch(
+def denormalize_log2(
     normed_f0,
     log_f0_mean,
     log_f0_std,
-    min_hz=30,
-    max_hz=600,
 ):
     """
     Denormalizes f0 from z-score + log-scale, WITH a safety clamp.
     """
-    # De-standardize
     log_f0 = normed_f0 * log_f0_std + log_f0_mean
-
-    # Convert back from log-scale
     f0 = 2**log_f0
-    voiced = f0 > 10
-    f0 = leaky_clamp(f0, min_f=min_hz, max_f=max_hz, slope=0.01)
-
-    # Set unvoiced parts to 0
-    f0 = f0 * voiced
-
     return f0

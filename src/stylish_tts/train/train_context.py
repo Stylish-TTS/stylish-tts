@@ -48,18 +48,24 @@ class NormalizationStats:
     def __init__(self) -> None:
         self.mel_log_mean: float = -4.0
         self.mel_log_std: float = 4.0
+        self.energy_log2_mean: float = 0.0
+        self.energy_log2_std: float = 1.0
         self.frames: int = 0
 
     def state_dict(self) -> dict:
         return {
             "mel_log_mean": float(self.mel_log_mean),
             "mel_log_std": float(self.mel_log_std),
+            "energy_log2_mean": float(self.energy_log2_mean),
+            "energy_log2_std": float(self.energy_log2_std),
             "frames": int(self.frames),
         }
 
     def load_state_dict(self, state: dict) -> None:
         self.mel_log_mean = float(state.get("mel_log_mean", -4.0))
         self.mel_log_std = float(state.get("mel_log_std", 4.0))
+        self.energy_log2_mean = float(state.get("energy_log2_mean", 0.0))
+        self.energy_log2_std = float(state.get("energy_log2_std", 0.0))
         self.frames = int(state.get("frames", 0))
 
 
@@ -215,6 +221,8 @@ class TrainContext:
                         {
                             "mel_log_mean": self.normalization.mel_log_mean,
                             "mel_log_std": self.normalization.mel_log_std,
+                            "energy_log2_mean": self.normalization.energy_log2_mean,
+                            "energy_log2_std": self.normalization.energy_log2_std,
                             "frames": self.normalization.frames,
                             "sample_rate": self.model_config.sample_rate,
                             "n_mels": self.model_config.n_mels,
@@ -239,9 +247,18 @@ class TrainContext:
                     data = json.load(f)
                 self.normalization.mel_log_mean = float(data.get("mel_log_mean", -4.0))
                 self.normalization.mel_log_std = float(data.get("mel_log_std", 4.0))
+                self.normalization.energy_log2_mean = float(
+                    data.get("energy_log2_mean", 0.0)
+                )
+                self.normalization.energy_log2_std = float(
+                    data.get("energy_log2_std", 1.0)
+                )
                 self.normalization.frames = int(data.get("frames", 0))
                 self.logger.info(
                     f"Loaded normalization stats: mean={self.normalization.mel_log_mean:.4f}, std={self.normalization.mel_log_std:.4f}, frames={self.normalization.frames}"
+                )
+                self.logger.info(
+                    f"Loaded energy normalization: mean={self.normalization.energy_log2_mean:.4f}, std={self.normalization.energy_log2_std:.4f}"
                 )
                 if self.normalization.frames == 0 or (
                     abs(self.normalization.mel_log_mean - (-4.0)) < 1e-6
@@ -269,7 +286,7 @@ class TrainContext:
                 dynamic_ncols=True,
             )
 
-        mean, std, frames = compute_log_mel_stats(
+        mean, std, energy_log2_mean, energy_log2_std, frames = compute_log_mel_stats(
             iterator,
             str(self.data_path(self.config.dataset.wav_path)),
             self.to_mel,
@@ -277,6 +294,8 @@ class TrainContext:
         )
         self.normalization.mel_log_mean = mean
         self.normalization.mel_log_std = std
+        self.normalization.energy_log2_mean = energy_log2_mean
+        self.normalization.energy_log2_std = energy_log2_std
         self.normalization.frames = frames
         try:
             with open(out_path, "w", encoding="utf-8") as f:
@@ -284,6 +303,8 @@ class TrainContext:
                     {
                         "mel_log_mean": mean,
                         "mel_log_std": std,
+                        "energy_log2_mean": energy_log2_mean,
+                        "energy_log2_std": energy_log2_std,
                         "frames": frames,
                         "sample_rate": self.model_config.sample_rate,
                         "n_mels": self.model_config.n_mels,
@@ -301,6 +322,9 @@ class TrainContext:
                 self.logger.info(
                     f"Computed normalization stats: mean={mean:.4f}, std={std:.4f}, frames={frames}"
                 )
+                self.logger.info(
+                    f"Computed energy normalization: mean={self.normalization.energy_log2_mean:.4f}, std={self.normalization.energy_log2_std:.4f}"
+                )
             # Also write a copy under dataset root for reuse across runs
             ds_copy = osp.join(self.config.dataset.path, "normalization.json")
             try:
@@ -309,6 +333,8 @@ class TrainContext:
                         {
                             "mel_log_mean": mean,
                             "mel_log_std": std,
+                            "energy_log2_mean": energy_log2_mean,
+                            "energy_log2_std": energy_log2_std,
                             "frames": frames,
                             "sample_rate": self.model_config.sample_rate,
                             "n_mels": self.model_config.n_mels,
