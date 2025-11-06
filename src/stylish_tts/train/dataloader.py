@@ -232,7 +232,8 @@ class Collater(object):
             if self.stage != "alignment":
                 if pitch is None:
                     exit(f"Pitch not found for segment {path}")
-                pitches[bid] = torch.repeat_interleave(pitch, 4, dim=-1)
+                pitches[bid] = pitch
+                # pitches[bid] = torch.repeat_interleave(pitch, 4, dim=-1)
 
             # alignments[bid, :text_size, : mel_length // 2] = duration
             # pred_dur = duration[0]
