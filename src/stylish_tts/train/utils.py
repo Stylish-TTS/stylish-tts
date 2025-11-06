@@ -81,7 +81,7 @@ def log_norm(x, mean, std, dim=2):
 
 
 def raw_energy(x):
-    return torch.log2(x.norm(dim=2))
+    return x.norm(dim=2)
 
 
 @torch.no_grad()
@@ -146,7 +146,7 @@ def compute_log_mel_stats(
         sum_x += log_mel.sum(dtype=torch.float64).cpu()
         sum_x2 += (log_mel * log_mel).sum(dtype=torch.float64).cpu()
 
-        energy_mel = raw_energy(mel.unsqueeze(1))
+        energy_mel = torch.log2(raw_energy(mel.unsqueeze(1)))
         energy_count += int(energy_mel.numel())
         energy_x += energy_mel.sum(dtype=torch.float64).cpu()
         energy_x2 += (energy_mel * energy_mel).sum(dtype=torch.float64).cpu()
