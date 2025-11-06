@@ -77,8 +77,8 @@ def speak_document(model, voicepack, infile, outfile, lang):
             audio = model.generate_speech(
                 tokens, [speech_style, pe_style, duration_style]
             )
-            # loudness = meter.integrated_loudness(audio)
-            # audio = pyln.normalize.loudness(audio, loudness, -20.0)
+            loudness = meter.integrated_loudness(audio)
+            audio = pyln.normalize.loudness(audio, loudness, -25.0)
             audio = np.multiply(audio, 32768).astype(np.int16)
             results.append(audio)
             sys.stderr.write(".")
