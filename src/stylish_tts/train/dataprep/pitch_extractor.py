@@ -46,17 +46,18 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
     model = None
     if method == "rmvpe":
         calculate_single = calculate_pitch_rmvpe
-        from .rmvpe import RMVPE
+        from .rmvpe import RMVPE, SAMPLE_RATE
 
         model = RMVPE(
-            hf_hub_download("stylish-tts/pitch_extractor", "rmvpe.safetensors")
+            hf_hub_download("stylish-tts/pitch_extractor", "rmvpe.safetensors"),
+            hop_length=SAMPLE_RATE // (model_config.sample_rate // model_config.hop_length)
         )
     elif method == "pyworld":
         calculate_single = calculate_pitch_pyworld
     else:
         exit("Invalid pitch calculation method passed")
 
-    with path.open("r") as f:
+    with path.open("r", encoding="utf-8") as f:
         total_segments = sum(1 for _ in f)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {}
@@ -126,20 +127,12 @@ def calculate_pitch_rmvpe(name, text_raw, wave, sample_rate, hop_length, model, 
     wave_16k = librosa.resample(
         wave, orig_sr=sample_rate, target_sr=16000, res_type="kaiser_best"
     )
-
-    pitch_rmvpe = (
-        torch.from_numpy(model.infer_from_audio(wave_16k, device=device))
+    pitch = (
+        torch.from_numpy(model.infer_from_audio(wave_16k, sample_rate=16000, device=device))
         .float()
         .unsqueeze(0)
-    )  # (1, frames)
-    pitch = torch.nn.functional.interpolate(
-        pitch_rmvpe.unsqueeze(1),  # (1, 1, frames)
-        size=frame_count,
-        mode="linear",
-        align_corners=True,
-    ).squeeze(
-        1
-    )  # (1, frames)
+    )
+    pitch = pitch[:, :-1]
     if torch.any(torch.isnan(pitch)):
         pitch[torch.isnan(pitch)] = zero_value
     return pitch

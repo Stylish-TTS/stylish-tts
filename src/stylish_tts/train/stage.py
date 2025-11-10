@@ -76,13 +76,13 @@ class Stage:
         if osp.isfile(batch_file):
             modified = os.stat(batch_file).st_mtime
             if self.last_batch_load is None or modified > self.last_batch_load:
-                with open(batch_file, "r") as batch_input:
+                with open(batch_file, "r", encoding="utf-8") as batch_input:
                     self.batch_sizes = json.load(batch_input)
                     self.last_batch_load = modified
 
     def save_batch_sizes(self) -> None:
         batch_file = osp.join(self.out_dir, f"{self.name}_batch_sizes.json")
-        with open(batch_file, "w") as o:
+        with open(batch_file, "w", encoding="utf-8") as o:
             json.dump(self.batch_sizes, o)
 
     def get_steps_per_val(self) -> int:
