@@ -107,7 +107,7 @@ class AcousticStep:
             )
             alignment_fine = train.duration_processor.duration_to_alignment(
                 batch.alignment[:, 0, :].long(),
-                multiplier=1,
+                multiplier=train.model_config.coarse_multiplier,
             )
         if use_predicted_pe:
             self.pe_style = train.model.pe_style_encoder(self.style_mel.unsqueeze(1))
