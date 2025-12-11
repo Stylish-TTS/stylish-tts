@@ -358,7 +358,7 @@ def save_git_diff(out_dir):
     commit_hash = get_git_commit_hash()
     diff = get_git_diff()
     diff_file = os.path.join(out_dir, "git_state.txt")
-    with open(diff_file, "w") as f:
+    with open(diff_file, "w", encoding="utf-8") as f:
         f.write(f"Git commit hash or version: {commit_hash}\n\n")
         f.write(diff)
     print(f"Git diff saved to {diff_file}")

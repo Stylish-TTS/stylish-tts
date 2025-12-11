@@ -476,6 +476,12 @@ class CTCLossWithLabelPriors(nn.Module):
         self.log_priors_sum = None
         self.num_samples = 0
         self.prior_scaling_factor = prior_scaling_factor  # This corresponds to the `alpha` hyper parameter in the paper
+        self.k2_device = "cpu"
+    
+    def to(self, device):
+        super().to(device)
+        self.k2_device = device if k2.with_cuda else "cpu"
+        return self
 
     def encode_supervisions(
         self, targets, target_lengths, input_lengths
@@ -515,7 +521,7 @@ class CTCLossWithLabelPriors(nn.Module):
         )
 
         decoding_graph = k2.ctc_graph(
-            token_ids, modified=False, device=log_probs.device
+            token_ids, modified=False, device=self.k2_device
         )
 
         # Accumulate label priors for this epoch
@@ -545,8 +551,8 @@ class CTCLossWithLabelPriors(nn.Module):
 
         # Compute CTC loss
         dense_fsa_vec = k2.DenseFsaVec(
-            log_probs,  # (N, T, C)
-            supervision_segments,
+            log_probs.to(self.k2_device),  # (N, T, C)
+            supervision_segments.to(self.k2_device),
         )
 
         loss = k2.ctc_loss(
@@ -555,10 +561,10 @@ class CTCLossWithLabelPriors(nn.Module):
             output_beam=10,
             reduction=self.reduction,
             use_double_scores=True,
-            target_lengths=target_lengths,
+            target_lengths=target_lengths.to(self.k2_device),
         )
 
-        return loss
+        return loss.to(log_probs.device)
 
     def on_train_epoch_end(self, train):
         if self.log_priors_sum is not None:

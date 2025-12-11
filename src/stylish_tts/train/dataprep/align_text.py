@@ -95,7 +95,7 @@ def align_text(config, model_config):
         text_cleaner,
         device,
     )
-    with open(pathlib.Path(config.dataset.path) / "scores_val.txt", "w") as f:
+    with open(pathlib.Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8") as f:
         for name in scores.keys():
             f.write(str(scores[name]) + " " + name + "\n")
     trains, scores = calculate_alignments(
@@ -107,7 +107,7 @@ def align_text(config, model_config):
         text_cleaner,
         device,
     )
-    with open(pathlib.Path(config.dataset.path) / "scores_train.txt", "w") as f:
+    with open(pathlib.Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8") as f:
         for name in scores.keys():
             f.write(str(scores[name]) + " " + name + "\n")
     result = vals | trains
@@ -126,7 +126,7 @@ def preprocess(wave):
 def calculate_alignments(
     label, path, wavdir, aligner, model_config, text_cleaner, device
 ):
-    with path.open("r") as f:
+    with path.open("r", encoding="utf-8") as f:
         total_segments = sum(1 for _ in f)
     alignment_map = {}
     scores_map = {}
@@ -370,7 +370,7 @@ def soft_alignment_bad(pred, phonemes):
 
 def audio_list(path, wavdir, model_config):
     coarse_hop_length = model_config.hop_length * model_config.coarse_multiplier
-    with path.open("r") as f:
+    with path.open("r", encoding="utf-8") as f:
         for line in f:
             fields = line.split("|")
             name = fields[0]
