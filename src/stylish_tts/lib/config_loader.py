@@ -369,8 +369,10 @@ class ModelConfig(BaseModel):
         ..., description="Configuration for the text aligner component."
     )
     decoder: DecoderConfig = Field(..., description="Decoder configuration parameters.")
-    generator: Union[RingformerGeneratorConfig, GeneratorConfig] = Field(
-        ..., description="Generator (vocoder) configuration parameters."
+    generator: GeneratorConfig = Field(
+        # Union[RingformerGeneratorConfig, GeneratorConfig] = Field(
+        ...,
+        description="Generator (vocoder) configuration parameters.",
     )
     text_encoder: TextEncoderConfig = Field(
         ..., description="Text encoder configuration parameters."

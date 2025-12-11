@@ -85,21 +85,25 @@ class AcousticStep:
                 train.normalization.mel_log_mean,
                 train.normalization.mel_log_std,
             )
-            energy = log_norm(
+            self.energy = log_norm(
                 self.mel.unsqueeze(1),
                 train.normalization.mel_log_mean,
                 train.normalization.mel_log_std,
             ).squeeze(1)
-            self.energy = normalize_log2(
-                energy,
-                train.normalization.energy_log2_mean,
-                train.normalization.energy_log2_std,
-            )
-            self.pitch = normalize_log2(
-                batch.pitch, train.f0_log2_mean, train.f0_log2_std
-            )
-            self.pitch = batch.pitch
             self.voiced = (batch.pitch > 10).float()
+            self.pitch = batch.pitch
+            # self.target_pitch = batch.pitch
+            # self.target_energy = self.energy
+            self.energy = torch.log(self.energy + 1e-9)
+
+            # self.energy = normalize_log2(
+            #     self.energy,
+            #     train.normalization.energy_log2_mean,
+            #     train.normalization.energy_log2_std,
+            # )
+            # self.pitch = normalize_log2(
+            #     self.pitch, train.f0_log2_mean, train.f0_log2_std
+            # )
 
         if alignment is None:
             alignment = train.duration_processor.duration_to_alignment(
@@ -110,43 +114,49 @@ class AcousticStep:
                 multiplier=train.model_config.coarse_multiplier,
             )
         if use_predicted_pe:
-            self.pe_style = train.model.pe_style_encoder(self.style_mel.unsqueeze(1))
-            self.pred_pitch, self.pred_energy, self.pred_voiced = (
-                train.model.pitch_energy_predictor(
-                    batch.text,
-                    batch.text_length,
-                    alignment,
-                    self.pe_style,
-                )
+            self.pe_style = train.model.pe_style_encoder(
+                self.style_mel, self.pitch, self.energy
+            )
+            self.pred_pitch, self.pred_energy = train.model.pitch_energy_predictor(
+                batch.text,
+                batch.text_length,
+                alignment,
+                self.pe_style,
             )
 
-            self.pitchcat = torch.stack([self.pitch, self.energy, self.voiced], dim=1)
+            self.pitchcat = torch.stack([self.pitch * self.voiced, self.energy], dim=1)
             self.pred_pitchcat = torch.stack(
-                [self.pred_pitch, self.pred_energy, self.pred_voiced], dim=1
+                [self.pred_pitch * self.voiced, self.pred_energy], dim=1
             )
 
         if predict_audio:
             self.speech_style = train.model.speech_style_encoder(
                 self.style_mel.unsqueeze(1)
             )
-            voiced = self.voiced
+            # voiced = self.voiced
             pitch = self.pitch
             energy = self.energy
-            base_pitch = batch.pitch
+            # base_pitch = batch.pitch
             if use_predicted_pe:
-                voiced = self.pred_voiced
                 pitch = self.pred_pitch
                 energy = self.pred_energy
-                base_pitch = denormalize_log2(
-                    self.pred_pitch, train.f0_log2_mean, train.f0_log2_std
-                )
+                # voiced = self.pred_voiced.round()
+                # base_pitch = pitch
+            # base_pitch = denormalize_log2(
+            #     pitch, train.f0_log2_mean, train.f0_log2_std
+            # )
+            base_pitch = pitch
+            voiced = (pitch > 20).float()
+            # pitch = torch.log(torch.abs(pitch) + 1)
+            # pitch = pitch * voiced
+            # base_pitch = base_pitch * voiced
             self.pred = train.model.speech_predictor(
                 batch.text,
                 batch.text_length,
                 alignment_fine,
                 pitch,
                 energy,
-                voiced.round(),
+                voiced,
                 self.speech_style,
                 base_pitch,
             )
@@ -214,18 +224,37 @@ class AcousticStep:
         self.train.magphase_loss(self.pred, self.batch.audio_gt, self.log)
 
     def pitch_loss(self):
-        target = torch.complex(self.pitch, self.energy)
-        prediction = torch.complex(self.pred_pitch, self.pred_energy)
+        # target = torch.complex(self.pitch * self.voiced, self.energy*4)
+        # prediction = torch.complex(self.pred_pitch * self.voiced, self.pred_energy*4)
+        # self.log.add_loss(
+        #     "pitch",
+        #     torch.nn.functional.l1_loss(target, prediction),
+        # )
+        target = self.pitch
+        prediction = self.pred_pitch
         self.log.add_loss(
             "pitch",
-            torch.nn.functional.l1_loss(target, prediction),
+            torch.nn.functional.smooth_l1_loss(target, prediction)
+            + torch.nn.functional.smooth_l1_loss(
+                torch.diff(target), torch.diff(prediction)
+            ),
+        )
+        target = self.energy
+        prediction = self.pred_energy
+        self.log.add_loss(
+            "energy",
+            torch.nn.functional.smooth_l1_loss(target, prediction)
+            + torch.nn.functional.smooth_l1_loss(
+                torch.diff(target), torch.diff(prediction)
+            ),
         )
 
     def voiced_loss(self):
-        self.log.add_loss(
-            "voiced",
-            torch.nn.functional.binary_cross_entropy(self.pred_voiced, self.voiced),
-        )
+        pass
+        # self.log.add_loss(
+        #     "voiced",
+        #     torch.nn.functional.binary_cross_entropy(self.pred_voiced, self.voiced),
+        # )
 
 
 ##### Alignment #####
@@ -382,16 +411,21 @@ def train_textual(
         train,
         log,
         use_predicted_pe=True,
-        predict_audio=False,
+        predict_audio=True,
     )
     train.stage.optimizer.zero_grad()
 
-    step.pitch_generator_loss()
+    step.mel_loss()
+    # step.pitch_generator_loss()
     step.pitch_loss()
     step.voiced_loss()
 
     train.accelerator.backward(log.backwards_loss())
-    return log.detach(), detach_all([step.pitchcat]), detach_all([step.pred_pitchcat])
+    return (
+        log.detach(),
+        None,
+        None,
+    )  # detach_all([step.pitchcat]), detach_all([step.pred_pitchcat])
 
 
 @torch.no_grad()
@@ -423,7 +457,8 @@ stages["textual"] = StageType(
         "pe_style_encoder",
     ],
     eval_models=["speech_predictor", "speech_style_encoder"],
-    discriminators=["pitch_disc"],
+    # discriminators=["pitch_disc"],
+    discriminators=[],
     inputs=[
         "text",
         "text_length",
@@ -433,7 +468,6 @@ stages["textual"] = StageType(
         "path",
     ],
 )
-
 
 ##### Duration #####
 
@@ -494,6 +528,18 @@ def train_duration(
 
 @torch.no_grad()
 def validate_duration(batch, train):
+    energy_mel, _ = calculate_mel(
+        batch.audio_gt,
+        train.to_mel,
+        train.normalization.mel_log_mean,
+        train.normalization.mel_log_std,
+    )
+    energy = log_norm(
+        energy_mel.unsqueeze(1),
+        train.normalization.mel_log_mean,
+        train.normalization.mel_log_std,
+    ).squeeze(1)
+    energy = torch.log(energy + 1e-9)
     style_mel, _ = calculate_mel(
         batch.audio_gt,
         train.to_style_mel,
@@ -511,7 +557,7 @@ def validate_duration(batch, train):
         duration_raw, batch.text_length
     )
 
-    pe_mel_style = train.model.pe_style_encoder(style_mel.unsqueeze(1))
+    pe_mel_style = train.model.pe_style_encoder(style_mel, batch.pitch, energy)
     speech_style = train.model.speech_style_encoder(style_mel.unsqueeze(1))
 
     results = []
@@ -525,12 +571,15 @@ def validate_duration(batch, train):
         alignment_fine = train.duration_processor.duration_to_alignment(
             duration[i : i + 1], multiplier=train.model_config.coarse_multiplier
         )
-        pred_pitch, pred_energy, pred_voiced = train.model.pitch_energy_predictor(
+        pred_pitch, pred_energy = train.model.pitch_energy_predictor(
             batch.text[i : i + 1, : batch.text_length[i]],
             batch.text_length[i : i + 1],
             alignment[:, : batch.text_length[i], :],
             pe_mel_style[i : i + 1],
         )
+        # pred_voiced = pred_voiced.round()
+        # base_pitch = denormalize_log2(pred_pitch, train.f0_log2_mean, train.f0_log2_std)
+        pred_voiced = (pred_pitch > 20).float()
         pred = train.model.speech_predictor(
             batch.text[i : i + 1, : batch.text_length[i]],
             batch.text_length[i : i + 1],
@@ -539,7 +588,7 @@ def validate_duration(batch, train):
             pred_energy,
             pred_voiced,
             speech_style[i : i + 1],
-            denormalize_log2(pred_pitch, train.f0_log2_mean, train.f0_log2_std),
+            pred_pitch,
         )
         audio = rearrange(pred.audio, "1 1 l -> l")
         results.append(audio)

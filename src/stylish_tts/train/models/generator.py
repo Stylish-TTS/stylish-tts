@@ -66,6 +66,7 @@ def padDiff(x):
 class UpsampleGenerator(torch.nn.Module):
     def __init__(
         self,
+        *,
         style_dim,
         resblock_kernel_sizes,
         upsample_rates,
@@ -84,15 +85,21 @@ class UpsampleGenerator(torch.nn.Module):
         self.gen_istft_n_fft = gen_istft_n_fft
         self.gen_istft_hop_size = gen_istft_hop_size
 
-        self.m_source = SourceModuleHnNSF(
-            sampling_rate=sample_rate,
-            upsample_scale=math.prod(upsample_rates) * gen_istft_hop_size,
-            harmonic_num=8,
-            voiced_threshod=10,
+        self.prior_generator = partial(
+            generate_pcph,
+            hop_length=math.prod(upsample_rates) * gen_istft_hop_size,  # hop_length,
+            sample_rate=sample_rate,
         )
-        self.f0_upsamp = torch.nn.Upsample(
-            scale_factor=math.prod(upsample_rates) * gen_istft_hop_size, mode="linear"
-        )
+
+        # self.m_source = SourceModuleHnNSF(
+        #     sampling_rate=sample_rate,
+        #     upsample_scale=math.prod(upsample_rates) * gen_istft_hop_size,
+        #     harmonic_num=8,
+        #     voiced_threshod=10,
+        # )
+        # self.f0_upsamp = torch.nn.Upsample(
+        #     scale_factor=math.prod(upsample_rates) * gen_istft_hop_size, mode="linear"
+        # )
         self.noise_convs = nn.ModuleList()
         self.noise_res = nn.ModuleList()
 
@@ -173,6 +180,7 @@ class UpsampleGenerator(torch.nn.Module):
             self.conformers.append(
                 Conformer(
                     dim=ch,
+                    style_dim=style_dim,
                     depth=2,
                     dim_head=64,
                     heads=8,
@@ -194,32 +202,38 @@ class UpsampleGenerator(torch.nn.Module):
             win_length=self.gen_istft_n_fft,
         )
 
-    def forward(self, mel, style, pitch, energy):
+    def forward(self, mel, style, pitch, energy, voiced):
         # x: [b,d,t]
         x = mel
         f0 = pitch
         s = style
         with torch.no_grad():
-            f0_len = f0.shape[1]
-            f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)  # bs,n,t
-
-            har_source, noi_source, uv = self.m_source(f0, f0_len)
-            har_source = har_source.transpose(1, 2).squeeze(1)
-            har_spec, har_x, har_y = self.stft.transform(har_source)
+            prior = self.prior_generator(pitch.unsqueeze(1), voiced.unsqueeze(1))
+            prior = prior.squeeze(1)
+            har_spec, har_x, har_y = self.stft.transform(prior)
+            har_spec = har_spec[:, :, :-1]
             har_phase = torch.atan2(har_y, har_x)
+            har_phase = har_phase[:, :, :-1]
+
+            # f0_len = f0.shape[1]
+            # f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)  # bs,n,t
+            # har_source, noi_source, uv = self.m_source(f0, f0_len)
+            # har_source = har_source.transpose(1, 2).squeeze(1)
+            # har_spec, har_x, har_y = self.stft.transform(har_source)
+            # har_phase = torch.atan2(har_y, har_x)
             har = torch.cat([har_spec, har_phase], dim=1)
 
         for i in range(self.num_upsamples):
             x = x + (1 / self.alphas[i]) * (torch.sin(self.alphas[i] * x) ** 2)
             x = rearrange(x, "b f t -> b t f")
-            x = self.conformers[i](x)
+            x = self.conformers[i](x, style)
             x = rearrange(x, "b t f -> b f t")
 
             x = self.ups[i](x)
             x_source = self.noise_convs[i](har)
-            # if i == self.num_upsamples - 1:
-            #     x = self.reflection_pad(x)
-            #     x_source = self.reflection_pad(x_source)
+            if i == self.num_upsamples - 1:
+                # x = self.reflection_pad(x)
+                x_source = self.reflection_pad(x_source)
 
             x_source = self.noise_res[i](x_source, s)
 
@@ -502,14 +516,23 @@ class Generator(torch.nn.Module):
     ):
         super(Generator, self).__init__()
 
-        self.prior_generator = partial(
-            generate_pcph,
-            hop_length=hop_length,
-            sample_rate=sample_rate,
+        self.scale = 2
+        self.scalehop = 3
+        # self.prior_generator = partial(
+        #     generate_pcph,
+        #     hop_length=hop_length,
+        #     sample_rate=sample_rate,
+        # )
+        self.m_source = SourceModuleHnNSF(
+            sampling_rate=sample_rate,
+            upsample_scale=hop_length,
+            harmonic_num=8,
+            voiced_threshod=10,
         )
+        self.f0_upsamp = torch.nn.Upsample(scale_factor=hop_length, mode="linear")
 
         self.amp_prior_conv = Conv1d(
-            n_fft // 2 + 1,
+            n_fft // self.scale // 2 + 1,
             config.hidden_dim,
             config.io_conv_kernel_size,
             1,
@@ -517,15 +540,36 @@ class Generator(torch.nn.Module):
         )
 
         self.phase_prior_conv = Conv1d(
-            n_fft // 2 + 1,
+            n_fft // self.scale // 2 + 1,
             config.hidden_dim,
             config.io_conv_kernel_size,
             1,
             padding=get_padding(config.io_conv_kernel_size, 1),
         )
 
-        self.amp_input_conv = Conv1d(
-            config.input_dim + config.hidden_dim * 2,
+        self.amp_prior_block = AdaptiveGeneratorBlock(
+            channels=config.hidden_dim,
+            style_dim=style_dim,
+            kernel_size=11,
+            dilation=[1, 3, 5],
+        )
+
+        self.phase_prior_block = AdaptiveGeneratorBlock(
+            channels=config.hidden_dim,
+            style_dim=style_dim,
+            kernel_size=11,
+            dilation=[1, 3, 5],
+        )
+        # self.amp_input_conv = Conv1d(
+        #     config.input_dim + config.hidden_dim,
+        #     config.hidden_dim,
+        #     config.io_conv_kernel_size,
+        #     1,
+        #     padding=get_padding(config.io_conv_kernel_size, 1),
+        # )
+
+        self.phase_input_conv = Conv1d(
+            config.input_dim + config.hidden_dim * 3,
             config.hidden_dim,
             config.io_conv_kernel_size,
             1,
@@ -534,7 +578,7 @@ class Generator(torch.nn.Module):
 
         self.amp_output_conv = Conv1d(
             config.hidden_dim,
-            n_fft // 2 + 1,
+            n_fft // self.scale // 2 + 1,
             config.io_conv_kernel_size,
             1,
             padding=get_padding(config.io_conv_kernel_size, 1),
@@ -542,14 +586,14 @@ class Generator(torch.nn.Module):
 
         self.phase_output_real_conv = Conv1d(
             config.hidden_dim,
-            n_fft // 2 + 1,
+            n_fft // self.scale // 2 + 1,
             config.io_conv_kernel_size,
             1,
             padding=get_padding(config.io_conv_kernel_size, 1),
         )
         self.phase_output_imag_conv = Conv1d(
             config.hidden_dim,
-            n_fft // 2 + 1,
+            n_fft // self.scale // 2 + 1,
             config.io_conv_kernel_size,
             1,
             padding=get_padding(config.io_conv_kernel_size, 1),
@@ -557,14 +601,14 @@ class Generator(torch.nn.Module):
 
         self.amp_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
         self.phase_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
-        self.phase_conformer = Conformer(
-            dim=config.hidden_dim,
-            style_dim=style_dim,
-            depth=config.conformer_layers,
-            attn_dropout=0.2,
-            ff_dropout=0.2,
-            conv_dropout=0.2,
-        )
+        # self.phase_conformer = Conformer(
+        #     dim=config.hidden_dim,
+        #     style_dim=style_dim,
+        #     depth=config.conformer_layers,
+        #     attn_dropout=0.2,
+        #     ff_dropout=0.2,
+        #     conv_dropout=0.2,
+        # )
         self.phase_convnext = nn.ModuleList(
             [
                 GeneratorConvNeXtBlock(
@@ -601,10 +645,15 @@ class Generator(torch.nn.Module):
         #     hop_length=hop_length,
         #     win_length=win_length,
         # )
+        # self.prior_stft = STFT(
+        #     filter_length=n_fft,
+        #     hop_length=hop_length,
+        #     win_length=win_length,
+        # )
         self.stft = STFT(
-            filter_length=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
+            filter_length=n_fft // self.scale,
+            hop_length=hop_length // self.scalehop,
+            win_length=win_length // self.scale,
         )
 
     def _init_weights(self, m):
@@ -620,33 +669,50 @@ class Generator(torch.nn.Module):
             #     mode="linear",
             #     align_corners=False,
             # )
-            prior = self.prior_generator(pitch.unsqueeze(1), voiced.unsqueeze(1))
-            prior = prior.squeeze(1)
+            # prior = self.prior_generator(pitch.unsqueeze(1), voiced.unsqueeze(1))
+            # prior = prior.squeeze(1)
+            pitch_len = pitch.shape[1]
+            pitch = self.f0_upsamp((pitch * voiced)[:, None]).transpose(1, 2)  # bs,n,t
+            prior, _, _ = self.m_source(pitch, pitch_len)
+            prior = prior.squeeze(2)
             har_spec, har_x, har_y = self.stft.transform(prior)
             har_spec = har_spec[:, :, :-1]
             har_phase = torch.atan2(har_y, har_x)
             har_phase = har_phase[:, :, :-1]
 
         logamp_prior = self.amp_prior_conv(har_spec)
+        logamp_prior = self.amp_prior_block(logamp_prior, style)
         phase_prior = self.phase_prior_conv(har_phase)
-        logamp_in = torch.cat([mel, logamp_prior, phase_prior], dim=1)
+        phase_prior = self.phase_prior_block(phase_prior, style)
+        logamp = mel
+        # logamp_in = torch.cat([mel, logamp_prior], dim=1)
 
-        logamp = self.amp_input_conv(logamp_in)
+        # logamp = self.amp_input_conv(logamp_in)
         logamp = logamp.transpose(1, 2)
         logamp = self.amp_norm(logamp)
         logamp = self.amp_conformer(logamp, style)
         logamp = logamp.transpose(1, 2)
+
         for conv_block in self.amp_convnext:
             logamp = conv_block(logamp, style)
 
+        phase_in = torch.cat([mel, logamp], dim=1)
         logamp = logamp.transpose(1, 2)
-        phase = logamp
         logamp = self.amp_final_layer_norm(logamp)
         logamp = logamp.transpose(1, 2)
         logamp = self.amp_output_conv(logamp)
+        logamp = torch.nn.functional.interpolate(
+            logamp, scale_factor=self.scalehop, mode="linear"
+        )
 
+        phase_in = torch.nn.functional.interpolate(
+            phase_in, scale_factor=self.scalehop, mode="linear"
+        )
+        phase_in = torch.cat([phase_in, logamp_prior, phase_prior], dim=1)
+        phase = self.phase_input_conv(phase_in)
+        phase = phase.transpose(1, 2)
         phase = self.phase_norm(phase)
-        phase = self.phase_conformer(phase, style)
+        # phase = self.phase_conformer(phase, style)
         phase = phase.transpose(1, 2)
         for conv_block in self.phase_convnext:
             phase = conv_block(phase, style)
@@ -679,7 +745,7 @@ def generate_pcph(
     voiced,
     hop_length: int,
     sample_rate: int,
-    noise_amplitude=0.01,
+    noise_amplitude=0.003,
     random_init_phase=True,
     power_factor=0.1,
     max_frequency=None,
@@ -704,15 +770,9 @@ def generate_pcph(
     """
     batch, _, frames = f0.size()
     device = f0.device
-    noise = noise_amplitude * torch.randn(
-        (batch, 1, frames * hop_length), device=device
-    )
-    # if torch.all(voiced.round() <= 0.1):
-    #     return noise
-
-    # vuv = f0 > 10.0
     vuv = voiced.round().bool()
-    f0 = f0 * vuv
+
+    # f0 = f0 * vuv
     # min_f0_value = torch.min(f0[f0 > 20]).item()
     max_frequency = max_frequency if max_frequency is not None else sample_rate / 2
     max_n_harmonics = 16  # min(16, int(max_frequency / min_f0_value))
@@ -744,4 +804,9 @@ def generate_pcph(
     harmonics = harmonic_mask * harmonics
     harmonics = harmonic_amplitude * torch.sum(harmonics, dim=1, keepdim=True)
 
-    return harmonics + noise
+    # vuv = torch.repeat_interleave(vuv, hop_length, dim=2)
+    # noise = noise_amplitude * torch.randn(
+    #     (batch, 1, frames * hop_length), device=device
+    # )
+    # noise = noise * (~vuv)
+    return harmonics  # + noise

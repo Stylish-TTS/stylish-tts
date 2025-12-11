@@ -9,6 +9,102 @@ from .ada_norm import AdaptiveLayerNorm, AdaptiveDecoderBlock
 from .conv_next import AdaptiveConvNeXtBlock
 
 
+import math
+import torch
+from torch import nn
+from torch.nn import functional as F
+from torch.nn.utils import weight_norm
+
+
+class AdainResBlk1d(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        style_dim=64,
+        actv=nn.LeakyReLU(0.2),
+        upsample="none",
+        dropout_p=0.0,
+    ):
+        super().__init__()
+        self.actv = actv
+        self.upsample_type = upsample
+        self.upsample = UpSample1d(upsample)
+        self.learned_sc = dim_in != dim_out
+        self._build_weights(dim_in, dim_out, style_dim)
+        self.dropout = nn.Dropout(dropout_p)
+
+        if upsample == "none":
+            self.pool = nn.Identity()
+        else:
+            self.pool = weight_norm(
+                nn.ConvTranspose1d(
+                    dim_in,
+                    dim_in,
+                    kernel_size=3,
+                    stride=2,
+                    groups=dim_in,
+                    padding=1,
+                    output_padding=1,
+                )
+            )
+
+    def _build_weights(self, dim_in, dim_out, style_dim):
+        self.conv1 = weight_norm(nn.Conv1d(dim_in, dim_out, 3, 1, 1))
+        self.conv2 = weight_norm(nn.Conv1d(dim_out, dim_out, 3, 1, 1))
+        self.norm1 = AdaIN1d(style_dim, dim_in)
+        self.norm2 = AdaIN1d(style_dim, dim_out)
+        if self.learned_sc:
+            self.conv1x1 = weight_norm(nn.Conv1d(dim_in, dim_out, 1, 1, 0, bias=False))
+
+    def _shortcut(self, x):
+        x = self.upsample(x)
+        if self.learned_sc:
+            x = self.conv1x1(x)
+        return x
+
+    def _residual(self, x, s):
+        x = self.norm1(x, s)
+        x = self.actv(x)
+        x = self.pool(x)
+        x = self.conv1(self.dropout(x))
+        x = self.norm2(x, s)
+        x = self.actv(x)
+        x = self.conv2(self.dropout(x))
+        return x
+
+    def forward(self, x, s):
+        out = self._residual(x, s)
+        out = (out + self._shortcut(x)) / math.sqrt(2)
+        return out
+
+
+class UpSample1d(nn.Module):
+    def __init__(self, layer_type):
+        super().__init__()
+        self.layer_type = layer_type
+
+    def forward(self, x):
+        if self.layer_type == "none":
+            return x
+        else:
+            return F.interpolate(x, scale_factor=2, mode="nearest")
+
+
+class AdaIN1d(nn.Module):
+    def __init__(self, style_dim, num_features):
+        super().__init__()
+        self.norm = nn.InstanceNorm1d(num_features, affine=False)
+        self.fc = nn.Linear(style_dim, num_features * 2)
+
+    def forward(self, x, s):
+        h = self.fc(s)
+        h = h.view(h.size(0), h.size(1), 1)
+        gamma, beta = torch.chunk(h, chunks=2, dim=1)
+        torch._check(x.shape[2] > 1)
+        return (1 + gamma) * self.norm(x) + beta
+
+
 class PitchEnergyPredictor(torch.nn.Module):
     def __init__(
         self,
@@ -25,6 +121,7 @@ class PitchEnergyPredictor(torch.nn.Module):
             inter_dim=inter_dim,
             config=text_config,
         )
+        dropout = 0.2
         self.prosody_encoder = ProsodyEncoder(
             sty_dim=style_dim,
             d_model=inter_dim,
@@ -32,86 +129,153 @@ class PitchEnergyPredictor(torch.nn.Module):
             dropout=0.2,
         )
 
+        d_hid = inter_dim
+        self.shared = nn.LSTM(
+            d_hid + style_dim, d_hid // 2, 1, batch_first=True, bidirectional=True
+        )
+        self.F0 = nn.ModuleList()
+        self.F0.append(
+            AdainResBlk1d(d_hid + style_dim, d_hid, style_dim, dropout_p=dropout)
+        )
+        self.F0.append(
+            AdainResBlk1d(
+                d_hid, d_hid // 2, style_dim, upsample=True, dropout_p=dropout
+            )
+        )
+        self.F0.append(
+            AdainResBlk1d(
+                d_hid // 2, d_hid // 2, style_dim, upsample=True, dropout_p=dropout
+            )
+        )
+        self.F0.append(
+            AdainResBlk1d(d_hid // 2, d_hid // 2, style_dim, dropout_p=dropout)
+        )
+
+        self.N = nn.ModuleList()
+        self.N.append(
+            AdainResBlk1d(d_hid + style_dim, d_hid, style_dim, dropout_p=dropout)
+        )
+        self.N.append(
+            AdainResBlk1d(
+                d_hid, d_hid // 2, style_dim, upsample=True, dropout_p=dropout
+            )
+        )
+        self.N.append(
+            AdainResBlk1d(
+                d_hid // 2, d_hid // 2, style_dim, upsample=True, dropout_p=dropout
+            )
+        )
+        self.N.append(
+            AdainResBlk1d(d_hid // 2, d_hid // 2, style_dim, dropout_p=dropout)
+        )
+
+        self.F0_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
+        self.N_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
+
         dropout = pitch_energy_config.dropout
 
-        cross_channels = inter_dim + style_dim
-        self.query_norm = AdaptiveLayerNorm(style_dim, cross_channels)
-        self.key_norm = AdaptiveLayerNorm(style_dim, cross_channels)
-        self.cross_attention = MultiHeadAttention(
-            channels=cross_channels,
-            out_channels=cross_channels,
-            n_heads=8,
-            p_dropout=dropout,
-        )
-        self.cross_window = 5
+        # cross_channels = inter_dim + style_dim
+        # self.query_norm = AdaptiveLayerNorm(style_dim, cross_channels)
+        # self.key_norm = AdaptiveLayerNorm(style_dim, cross_channels)
+        # self.cross_attention = MultiHeadAttention(
+        #     channels=cross_channels,
+        #     out_channels=cross_channels,
+        #     n_heads=8,
+        #     p_dropout=dropout,
+        # )
+        # self.cross_window = 5
 
-        self.cross_post = torch.nn.Sequential(
-            weight_norm(
-                torch.nn.Conv1d(
-                    cross_channels,
-                    cross_channels,
-                    kernel_size=5,
-                    padding=2,
-                    groups=cross_channels,
-                )
-            ),
-            torch.nn.SiLU(),
-            weight_norm(torch.nn.Conv1d(cross_channels, cross_channels, kernel_size=1)),
-        )
+        # self.cross_post = torch.nn.Sequential(
+        #     weight_norm(
+        #         torch.nn.Conv1d(
+        #             cross_channels,
+        #             cross_channels,
+        #             kernel_size=5,
+        #             padding=2,
+        #             groups=cross_channels,
+        #         )
+        #     ),
+        #     torch.nn.SiLU(),
+        #     weight_norm(torch.nn.Conv1d(cross_channels, cross_channels, kernel_size=1)),
+        # )
 
-        self.F0 = torch.nn.ModuleList(
-            [
-                AdaptiveDecoderBlock(
-                    inter_dim + style_dim,
-                    inter_dim + style_dim,
-                    style_dim,
-                    dropout_p=dropout,
-                    kernel_size=13,
-                )
-                for _ in range(4)
-            ]
-        )
+        # self.F0 = torch.nn.ModuleList(
+        #     [
+        #         AdaptiveDecoderBlock(
+        #             inter_dim + style_dim,
+        #             inter_dim + style_dim,
+        #             style_dim,
+        #             dropout_p=dropout,
+        #             kernel_size=13,
+        #         )
+        #         for _ in range(4)
+        #     ]
+        # )
 
-        self.N = torch.nn.ModuleList(
-            [
-                AdaptiveDecoderBlock(
-                    inter_dim + style_dim,
-                    inter_dim + style_dim,
-                    style_dim,
-                    dropout_p=dropout,
-                    kernel_size=13,
-                )
-                for _ in range(4)
-            ]
-        )
+        # self.voiced = torch.nn.ModuleList(
+        #     [
+        #         AdaptiveDecoderBlock(
+        #             inter_dim + style_dim,
+        #             inter_dim + style_dim,
+        #             style_dim,
+        #             dropout_p=dropout,
+        #             kernel_size=13,
+        #         )
+        #         for _ in range(4)
+        #     ]
+        # )
 
-        self.F0_post = torch.nn.ModuleList(
-            [
-                AdaptiveConvNeXtBlock(
-                    inter_dim + style_dim,
-                    (inter_dim + style_dim) * 3,
-                    style_dim,
-                    dropout=dropout,
-                )
-                for _ in range(2)
-            ]
-        )
-        self.N_post = torch.nn.ModuleList(
-            [
-                AdaptiveConvNeXtBlock(
-                    inter_dim + style_dim,
-                    (inter_dim + style_dim) * 3,
-                    style_dim,
-                    dropout=dropout,
-                )
-                for _ in range(2)
-            ]
-        )
+        # self.N = torch.nn.ModuleList(
+        #     [
+        #         AdaptiveDecoderBlock(
+        #             inter_dim + style_dim,
+        #             inter_dim + style_dim,
+        #             style_dim,
+        #             dropout_p=dropout,
+        #             kernel_size=13,
+        #         )
+        #         for _ in range(4)
+        #     ]
+        # )
 
-        self.F0_proj = torch.nn.Conv1d(inter_dim + style_dim, 1, 1, 1, 0)
-        self.N_proj = torch.nn.Conv1d(inter_dim + style_dim, 1, 1, 1, 0)
-        self.voiced_proj = torch.nn.Conv1d(inter_dim + style_dim, 1, 1, 1, 0)
-        self.sigmoid = torch.nn.Sigmoid()
+        # self.F0_post = torch.nn.ModuleList(
+        #     [
+        #         AdaptiveConvNeXtBlock(
+        #             inter_dim + style_dim,
+        #             (inter_dim + style_dim) * 3,
+        #             style_dim,
+        #             dropout=dropout,
+        #         )
+        #         for _ in range(2)
+        #     ]
+        # )
+        # self.voiced_post = torch.nn.ModuleList(
+        #     [
+        #         AdaptiveConvNeXtBlock(
+        #             inter_dim + style_dim,
+        #             (inter_dim + style_dim) * 3,
+        #             style_dim,
+        #             dropout=dropout,
+        #         )
+        #         for _ in range(2)
+        #     ]
+        # )
+        # self.N_post = torch.nn.ModuleList(
+        #     [
+        #         AdaptiveConvNeXtBlock(
+        #             inter_dim + style_dim,
+        #             (inter_dim + style_dim) * 3,
+        #             style_dim,
+        #             dropout=dropout,
+        #         )
+        #         for _ in range(2)
+        #     ]
+        # )
+
+        # self.F0_proj = torch.nn.Conv1d(inter_dim + style_dim, 1, 1, 1, 0)
+        # self.N_proj = torch.nn.Conv1d(inter_dim + style_dim, 1, 1, 1, 0)
+        # self.voiced_proj = torch.nn.Conv1d(inter_dim + style_dim, 1, 1, 1, 0)
+        # self.sigmoid = torch.nn.Sigmoid()
 
     def compute_cross(self, text_encoding, alignment, style, text_mask):
         """
@@ -139,50 +303,165 @@ class PitchEnergyPredictor(torch.nn.Module):
         mask = length_to_mask(text_lengths, text_encoding.shape[2]).to(
             text_lengths.device
         )
-        prosody = self.prosody_encoder(text_encoding, style, text_lengths)
-        x = self.compute_cross(prosody, alignment, style, mask)
+        prosody = self.prosody_encoder(text_encoding, style, text_lengths)  # , mask)
 
-        F0 = x
+        x = prosody.transpose(1, 2) @ alignment
+        x = x.transpose(-1, -2)
+        # x, _ = self.shared(x.transpose(-1, -2))
+
+        F0 = x.transpose(-1, -2)
         for block in self.F0:
             F0 = block(F0, style)
-        F0 = torch.nn.functional.interpolate(
-            F0, scale_factor=self.coarse_multiplier, mode="linear"
-        )
-        for block in self.F0_post:
-            F0 = block(F0, style)
-        voiced = self.voiced_proj(F0)
-        voiced = self.sigmoid(voiced)
         F0 = self.F0_proj(F0)
 
-        N = x
+        N = x.transpose(-1, -2)
         for block in self.N:
-            N = block(N, style)
-        N = torch.nn.functional.interpolate(
-            N, scale_factor=self.coarse_multiplier, mode="linear"
-        )
-        for block in self.N_post:
             N = block(N, style)
         N = self.N_proj(N)
 
-        return F0.squeeze(1), N.squeeze(1), voiced.squeeze(1)
+        return F0.squeeze(1), N.squeeze(1)
+
+        # x = self.compute_cross(prosody, alignment, style, mask)
+        # x = prosody.transpose(1, 2)
+
+        # F0 = x
+        # for block in self.F0:
+        #     F0 = block(F0, style)
+        # voiced = F0
+        # for block in self.voiced_post:
+        #     voiced = block(voiced, style)
+
+        # for block in self.F0_post:
+        #     F0 = block(F0, style)
+        # F0 = torch.nn.functional.dropout(F0, 0.5)
+        # F0 = self.F0_proj(F0)
+        # F0 = torch.matmul(F0, alignment)
+        # F0 = torch.nn.functional.interpolate(
+        #     F0, scale_factor=self.coarse_multiplier, mode="linear"
+        # )
+
+        # voiced = x
+        # for block in self.voiced:
+        #     voiced = block(voiced, style)
+        # voiced = torch.nn.functional.interpolate(
+        #     voiced, scale_factor=self.coarse_multiplier, mode="linear"
+        # )
+        # for block in self.voiced_post:
+        #     voiced = block(voiced, style)
+        # voiced = torch.nn.functional.dropout(voiced, 0.5)
+        # voiced = self.voiced_proj(voiced)
+        # voiced = self.sigmoid(voiced)
+
+        # N = x
+        # for block in self.N:
+        #     N = block(N, style)
+        # for block in self.N_post:
+        #     N = block(N, style)
+        # N = torch.nn.functional.dropout(N, 0.5)
+        # N = self.N_proj(N)
+        # N = torch.matmul(N, alignment)
+        # N = torch.nn.functional.interpolate(
+        #     N, scale_factor=self.coarse_multiplier, mode="linear"
+        # )
+
+        # return F0.squeeze(1), N.squeeze(1), voiced.squeeze(1)
 
 
-def build_monotonic_band_mask(alignment, text_mask, window):
-    """
-    alignment: [B, T, F] (monotonic hard/soft align)
-    text_mask: [B, T] True at padding
-    Returns attn_mask: [B, 1, F, T] True where attention is NOT allowed.
-    """
-    with torch.no_grad():
-        B, T, F = alignment.shape
-        tau = alignment.argmax(dim=1)
-        t_idx = torch.arange(T, device=alignment.device).view(1, 1, T)
-        tau_exp = tau.unsqueeze(-1)
-        band = (t_idx >= (tau_exp - window)) & (t_idx <= (tau_exp + window))
+# def build_monotonic_band_mask(alignment, text_mask, window):
+#     """
+#     alignment: [B, T, F] (monotonic hard/soft align)
+#     text_mask: [B, T] True at padding
+#     Returns attn_mask: [B, 1, F, T] True where attention is NOT allowed.
+#     """
+#     with torch.no_grad():
+#         B, T, F = alignment.shape
+#         tau = alignment.argmax(dim=1)
+#         t_idx = torch.arange(T, device=alignment.device).view(1, 1, T)
+#         tau_exp = tau.unsqueeze(-1)
+#         band = (t_idx >= (tau_exp - window)) & (t_idx <= (tau_exp + window))
+#
+#         band_mask = ~band
+#
+#         # Also mask padded tokens
+#         key_pad = text_mask.unsqueeze(1).expand(B, F, T)
+#         full_mask = band_mask | key_pad
+#         return full_mask.unsqueeze(1)
 
-        band_mask = ~band
 
-        # Also mask padded tokens
-        key_pad = text_mask.unsqueeze(1).expand(B, F, T)
-        full_mask = band_mask | key_pad
-        return full_mask.unsqueeze(1)
+class ProsodyEncoderOld(nn.Module):
+    def __init__(self, sty_dim, d_model, nlayers, dropout=0.1):
+        super().__init__()
+        self.lstms = nn.ModuleList()
+        for _ in range(nlayers):
+            self.lstms.append(
+                nn.LSTM(
+                    d_model + sty_dim,
+                    d_model // 2,
+                    num_layers=1,
+                    batch_first=True,
+                    bidirectional=True,
+                    dropout=dropout,
+                )
+            )
+            self.lstms.append(AdaLayerNorm(sty_dim, d_model))
+
+        self.dropout = dropout
+        self.d_model = d_model
+        self.sty_dim = sty_dim
+
+    def forward(self, x, style, text_lengths, m):
+        masks = m.to(text_lengths.device)
+
+        x = x.permute(2, 0, 1)
+        s = style.expand(x.shape[0], x.shape[1], -1)
+        x = torch.cat([x, s], dim=-1)
+        x.masked_fill_(masks.unsqueeze(-1).transpose(0, 1), 0.0)
+
+        x = x.transpose(0, 1)
+        input_lengths = text_lengths.cpu().numpy()
+        x = x.transpose(-1, -2)
+
+        for block in self.lstms:
+            if isinstance(block, AdaLayerNorm):
+                x = block(x.transpose(-1, -2), style).transpose(-1, -2)
+                x = torch.cat([x, s.permute(1, -1, 0)], dim=1)
+                x.masked_fill_(masks.unsqueeze(-1).transpose(-1, -2), 0.0)
+            else:
+                x = x.transpose(-1, -2)
+                x = nn.utils.rnn.pack_padded_sequence(
+                    x, input_lengths, batch_first=True, enforce_sorted=False
+                )
+                block.flatten_parameters()
+                x, _ = block(x)
+                x, _ = nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+                x = F.dropout(x, p=self.dropout, training=self.training)
+                x = x.transpose(-1, -2)
+
+                x_pad = torch.zeros([x.shape[0], x.shape[1], m.shape[-1]])
+
+                x_pad[:, :, : x.shape[-1]] = x
+                x = x_pad.to(x.device)
+
+        return x.transpose(-1, -2)
+
+
+class AdaLayerNorm(nn.Module):
+    def __init__(self, style_dim, channels, eps=1e-5):
+        super().__init__()
+        self.channels = channels
+        self.eps = eps
+
+        self.fc = nn.Linear(style_dim, channels * 2)
+
+    def forward(self, x, s):
+        x = x.transpose(-1, -2)
+        x = x.transpose(1, -1)
+
+        h = self.fc(s)
+        h = h.view(h.size(0), h.size(1), 1)
+        gamma, beta = torch.chunk(h, chunks=2, dim=1)
+        gamma, beta = gamma.transpose(1, -1), beta.transpose(1, -1)
+
+        x = F.layer_norm(x, (self.channels,), eps=self.eps)
+        x = (1 + gamma) * x + beta
+        return x.transpose(1, -1).transpose(-1, -2)

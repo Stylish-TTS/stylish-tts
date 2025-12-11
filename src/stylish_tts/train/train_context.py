@@ -136,11 +136,13 @@ class TrainContext:
         # self.magphase_loss: MagPhaseLoss = MagPhaseLoss(
         #     n_fft=self.model_config.generator.gen_istft_n_fft,
         #     hop_length=self.model_config.generator.gen_istft_hop_size,
+        #     win_length=self.model_config.generator.gen_istft_n_fft,
         # ).to(self.config.training.device)
+        # TODO: Remove hardcoded valude
         self.magphase_loss: MagPhaseLoss = MagPhaseLoss(
-            n_fft=self.model_config.n_fft,
-            hop_length=self.model_config.hop_length,
-            win_length=self.model_config.win_length,
+            n_fft=self.model_config.n_fft // 2,
+            hop_length=self.model_config.hop_length // 3,
+            win_length=self.model_config.win_length // 2,
         ).to(self.config.training.device)
         self.duration_loss: DurationLoss = None
 
@@ -207,8 +209,10 @@ class TrainContext:
         all_f0 = []
         for f0 in self.batch_manager.dataset.pitch.values():
             all_f0.append(f0[f0 > 10].flatten())
+            # all_f0.append(f0.flatten())
         all_f0 = torch.cat(all_f0, 0)
-        all_f0 = torch.log2(all_f0 + 1e-9)
+        all_f0 = torch.clamp(all_f0, min=1, max=600)
+        all_f0 = torch.log(all_f0 + 1e-9)
         self.f0_log2_mean = all_f0.mean()
         self.f0_log2_std = all_f0.std()
 

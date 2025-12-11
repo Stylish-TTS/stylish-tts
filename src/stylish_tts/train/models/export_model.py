@@ -44,18 +44,20 @@ class ExportModel(torch.nn.Module):
             dur_pred, text_lengths, multiplier=self.coarse_multiplier
         )
         torch._check(alignment.shape[2] < 10000)
-        pitch, energy, voiced = self.pitch_energy_predictor(
+        pitch, energy = self.pitch_energy_predictor(
             texts, text_lengths, alignment, pe_style
         )
+        voiced = (pitch > 20).float()
         prediction = self.speech_predictor(
             texts,
             text_lengths,
             alignment_fine,
             pitch,
             energy,
-            voiced.round(),
+            voiced,
             speech_style,
-            denormalize_pitch(pitch, self.pitch_log2_mean, self.pitch_log2_std),
+            # denormalize_log2(pitch, voiced, self.pitch_log2_mean, self.pitch_log2_std),
+            pitch,
         )
         audio = rearrange(prediction.audio, "1 1 l -> l")
         return audio

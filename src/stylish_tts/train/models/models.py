@@ -10,7 +10,7 @@ from .pitch_energy_predictor import PitchEnergyPredictor
 
 from .text_encoder import TextEncoder
 from .text_style_encoder import TextStyleEncoder
-from .mel_style_encoder import MelStyleEncoder
+from .mel_style_encoder import MelStyleEncoder, PitchStyleEncoder
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .speech_predictor import SpeechPredictor
 from .pitch_discriminator import PitchDiscriminator
@@ -50,11 +50,12 @@ def build_model(model_config: ModelConfig):
         model_config.style_encoder.max_channels,
         model_config.style_encoder.skip_downsample,
     )
-    pe_style_encoder = MelStyleEncoder(
+    pe_style_encoder = PitchStyleEncoder(
         model_config.style_encoder.n_mels,
         model_config.style_dim,
         model_config.style_encoder.max_channels,
         model_config.style_encoder.skip_downsample,
+        coarse_multiplier=model_config.coarse_multiplier,
     )
     duration_style_encoder = MelStyleEncoder(
         model_config.style_encoder.n_mels,
@@ -74,7 +75,7 @@ def build_model(model_config: ModelConfig):
         speech_style_encoder=speech_style_encoder,
         pe_style_encoder=pe_style_encoder,
         duration_style_encoder=duration_style_encoder,
-        pitch_disc=PitchDiscriminator(dim_in=3, dim_hidden=64, kernel=21),
+        pitch_disc=PitchDiscriminator(dim_in=2, dim_hidden=64, kernel=21),
         dur_disc=PitchDiscriminator(dim_in=1, dim_hidden=64, kernel=5),
     )
 

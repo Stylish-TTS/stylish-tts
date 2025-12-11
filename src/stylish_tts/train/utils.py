@@ -146,7 +146,7 @@ def compute_log_mel_stats(
         sum_x += log_mel.sum(dtype=torch.float64).cpu()
         sum_x2 += (log_mel * log_mel).sum(dtype=torch.float64).cpu()
 
-        energy_mel = torch.log2(raw_energy(mel.unsqueeze(1)))
+        energy_mel = torch.log(raw_energy(mel.unsqueeze(1)))
         energy_count += int(energy_mel.numel())
         energy_x += energy_mel.sum(dtype=torch.float64).cpu()
         energy_x2 += (energy_mel * energy_mel).sum(dtype=torch.float64).cpu()
@@ -579,9 +579,11 @@ def normalize_log2(f0, log_f0_mean, log_f0_std):
     Normalizes f0 using pre-calculated log-scale z-score statistics.
     """
 
-    log_f0 = torch.log2(f0 + 1e-8)
-    normed_f0 = (log_f0 - log_f0_mean) / log_f0_std
-    return normed_f0
+    f0 = torch.clamp(f0, min=1)
+    log_f0 = torch.log(f0 + 1e-8)
+    # normed_f0 = (log_f0 - log_f0_mean) / log_f0_std
+    # return normed_f0
+    return log_f0
 
 
 def denormalize_log2(
@@ -592,6 +594,8 @@ def denormalize_log2(
     """
     Denormalizes f0 from z-score + log-scale, WITH a safety clamp.
     """
-    log_f0 = normed_f0 * log_f0_std + log_f0_mean
-    f0 = 2**log_f0
+    # log_f0 = normed_f0 * log_f0_std + log_f0_mean
+    log_f0 = normed_f0
+    f0 = torch.exp(log_f0)
+    f0 = torch.clamp(f0, min=1)
     return f0

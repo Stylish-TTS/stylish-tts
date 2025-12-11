@@ -350,7 +350,7 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
     from stylish_tts.train.cli_util import Checkpoint
     from stylish_tts.train.dataloader import build_dataloader, FilePathDataset
     from stylish_tts.lib.text_utils import TextCleaner
-    from stylish_tts.train.utils import get_data_path_list, calculate_mel
+    from stylish_tts.train.utils import get_data_path_list, calculate_mel, log_norm
 
     print("Generate voicepack...")
     config = get_config(config_path)
@@ -360,6 +360,14 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
     if state.norm.frames <= 0:
         exit("No normalization state found. Cannot generate voicepack.")
     sbert = SentenceTransformer("stsb-mpnet-base-v2")
+
+    to_mel = torchaudio.transforms.MelSpectrogram(
+        n_mels=model_config.n_mels,
+        n_fft=model_config.n_fft,
+        win_length=model_config.win_length,
+        hop_length=model_config.hop_length,
+        sample_rate=model_config.sample_rate,
+    ).to(config.training.device)
 
     to_style_mel = torchaudio.transforms.MelSpectrogram(
         n_mels=model_config.style_encoder.n_mels,
@@ -426,12 +434,25 @@ def voicepack(config_path, model_config_path, voicepack, checkpoint):
         with torch.no_grad():
             path = batch[3][0]
             wave = batch[0].to(device)
+            pitch = batch[4].to(device)
             length = batch[2][0].to(device)
+            energy_mel, _ = calculate_mel(
+                wave,
+                to_mel,
+                state.norm.mel_log_mean,
+                state.norm.mel_log_std,
+            )
+            energy = log_norm(
+                energy_mel.unsqueeze(1),
+                state.norm.mel_log_mean,
+                state.norm.mel_log_std,
+            ).squeeze(1)
+            energy = torch.log(energy + 1e-9)
             style_mel, _ = calculate_mel(
                 wave, to_style_mel, state.norm.mel_log_mean, state.norm.mel_log_std
             )
             speech_style = state.model.speech_style_encoder(style_mel.unsqueeze(1))
-            pe_style = state.model.pe_style_encoder(style_mel.unsqueeze(1))
+            pe_style = state.model.pe_style_encoder(style_mel, pitch, energy)
             duration_style = state.model.duration_style_encoder(style_mel.unsqueeze(1))
 
             embedding = torch.from_numpy(path_to_embedding[path]).to(device)

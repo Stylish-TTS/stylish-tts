@@ -19,25 +19,26 @@ text_aligner:
   token_embedding_dim: 512
 
 decoder:
-  hidden_dim: 256
+  hidden_dim: 127
   residual_dim: 64
 
 # generator:
 #   type: 'ringformer'
 #   resblock_kernel_sizes: [ 3, 7, 11 ]
-#   upsample_rates: [ 4, 5 ]
-#   upsample_initial_channel: 512
+#   upsample_rates: [ 5 ]
+#   input_dim: 256
+#   upsample_initial_channel: 256
 #   upsample_last_channel: 128
 #   resblock_dilation_sizes: [ [ 1, 3, 5 ], [ 1, 3, 5 ], [ 1, 3, 5 ] ]
-#   upsample_kernel_sizes: [ 8, 10 ]
+#   upsample_kernel_sizes: [ 10 ]
 #   gen_istft_n_fft: 60
 #   gen_istft_hop_size: 15
 #   depth: 2
 
 generator:
   type: 'freegan'
-  input_dim: 256
-  hidden_dim: 257
+  input_dim: 127
+  hidden_dim: 127
   conv_intermediate_dim: 768
   io_conv_kernel_size: 7
   conformer_layers: 1

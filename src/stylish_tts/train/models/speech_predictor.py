@@ -5,7 +5,7 @@ from .prosody_encoder import ProsodyEncoder
 from .duration_predictor import DurationPredictor
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .decoder import Decoder
-from .generator import Generator
+from .generator import UpsampleGenerator, Generator
 
 
 class SpeechPredictor(torch.nn.Module):
@@ -23,7 +23,7 @@ class SpeechPredictor(torch.nn.Module):
             residual_dim=model_config.decoder.residual_dim,
         )
 
-        # self.generator = Generator(
+        # self.generator = UpsampleGenerator(
         #     style_dim=model_config.style_dim,
         #     resblock_kernel_sizes=model_config.generator.resblock_kernel_sizes,
         #     upsample_rates=model_config.generator.upsample_rates,
