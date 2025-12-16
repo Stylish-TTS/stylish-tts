@@ -477,7 +477,7 @@ class CTCLossWithLabelPriors(nn.Module):
         self.num_samples = 0
         self.prior_scaling_factor = prior_scaling_factor  # This corresponds to the `alpha` hyper parameter in the paper
         self.k2_device = "cpu"
-    
+
     def to(self, device):
         super().to(device)
         self.k2_device = device if k2.with_cuda else "cpu"
@@ -520,9 +520,7 @@ class CTCLossWithLabelPriors(nn.Module):
             targets, target_lengths, input_lengths
         )
 
-        decoding_graph = k2.ctc_graph(
-            token_ids, modified=False, device=self.k2_device
-        )
+        decoding_graph = k2.ctc_graph(token_ids, modified=False, device=self.k2_device)
 
         # Accumulate label priors for this epoch
         log_probs = log_probs.permute(1, 0, 2)  # (T, N, C) -> (N, T, C)

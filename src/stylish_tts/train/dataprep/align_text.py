@@ -19,6 +19,9 @@ from stylish_tts.lib.config_loader import load_config_yaml, load_model_config_ya
 from stylish_tts.lib.text_utils import TextCleaner
 from stylish_tts.train.utils import get_data_path_list, maximum_path
 from stylish_tts.train.dataloader import get_frame_count, get_time_bin
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from stylish_tts.train.utils import calculate_mel
+from stylish_tts.train.train_context import TrainContext
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,11 +29,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# TODO: Merge this to_mel implementation with the one in stage_type
-to_mel = None
-norm_mean = -4.0
-norm_std = 4.0
 
 
 def align_text(config, model_config):
@@ -45,35 +43,8 @@ def align_text(config, model_config):
             f"Alignment does not support mps device. Falling back on cpu training."
         )
 
-    global to_mel, norm_mean, norm_std
-
-    to_mel = torchaudio.transforms.MelSpectrogram(
-        n_mels=80,  # align seems to perform worse on higher n_mels
-        n_fft=model_config.n_fft,
-        win_length=model_config.win_length,
-        hop_length=model_config.hop_length,
-        sample_rate=model_config.sample_rate,
-    )
-
-    # Try to load dataset normalization stats if available
-    try:
-        import json
-
-        stats_path = pathlib.Path(config.dataset.path) / "normalization.json"
-        if stats_path.exists():
-            with stats_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            norm_mean = float(data.get("mel_log_mean", -4.0))
-            norm_std = float(data.get("mel_log_std", 4.0))
-            logger.info(
-                f"Using dataset normalization stats for alignment: mean={norm_mean:.4f}, std={norm_std:.4f}"
-            )
-        else:
-            logger.warning(
-                "Dataset normalization.json not found; using default normalization (-4, 4) for alignment."
-            )
-    except Exception as e:
-        logger.warning(f"Could not load dataset normalization.json: {e}")
+    train = TrainContext("alignment", root, config, model_config, logger)
+    train.to_align_mel = train.to_align_mel.to(device)
 
     aligner_dict = load_file(model, device=device)
     aligner = tdnn_blstm_ctc_model_base(
@@ -83,82 +54,104 @@ def align_text(config, model_config):
     aligner.load_state_dict(aligner_dict)
     aligner = aligner.eval()
 
-    text_cleaner = TextCleaner(model_config.symbol)
-
     wavdir = root / config.dataset.wav_path
     vals, scores = calculate_alignments(
+        train,
         "Val Set",
         root / config.dataset.val_data,
         wavdir,
         aligner,
         model_config,
-        text_cleaner,
         device,
     )
-    with open(pathlib.Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8") as f:
+    with open(
+        pathlib.Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8"
+    ) as f:
         for name in scores.keys():
             f.write(str(scores[name]) + " " + name + "\n")
     trains, scores = calculate_alignments(
+        train,
         "Train Set",
         root / config.dataset.train_data,
         wavdir,
         aligner,
         model_config,
-        text_cleaner,
         device,
     )
-    with open(pathlib.Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8") as f:
+    with open(
+        pathlib.Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8"
+    ) as f:
         for name in scores.keys():
             f.write(str(scores[name]) + " " + name + "\n")
     result = vals | trains
     save_file(result, out)
 
 
-def preprocess(wave):
-    wave_tensor = torch.from_numpy(wave).float()
-    mel_tensor = to_mel(wave_tensor)
-    mel_tensor = (torch.log(1e-5 + mel_tensor.unsqueeze(0)) - norm_mean) / norm_std
-    mel_tensor = mel_tensor[:, :, :-1]
-    return mel_tensor
+def tqdm_wrapper(iterable, total=None, desc="", color="GREEN"):
+    return tqdm.tqdm(
+        iterable=iterable,
+        desc=desc,
+        unit="segments",
+        initial=0,
+        colour=color,
+        dynamic_ncols=True,
+        total=total,
+    )
 
 
 @torch.no_grad()
 def calculate_alignments(
-    label, path, wavdir, aligner, model_config, text_cleaner, device
+    train,
+    label,
+    path,
+    wavdir,
+    aligner,
+    model_config,
+    device,
 ):
-    with path.open("r", encoding="utf-8") as f:
-        total_segments = sum(1 for _ in f)
     alignment_map = {}
     scores_map = {}
-    iterator = tqdm.tqdm(
-        iterable=audio_list(path, wavdir, model_config),
-        desc="Aligning " + label,
-        unit="segments",
-        initial=0,
-        colour="MAGENTA",
-        dynamic_ncols=True,
+
+    with path.open("r", encoding="utf-8") as f:
+        total_segments = sum(1 for _ in f)
+    iterator = tqdm_wrapper(
+        audio_list(path, wavdir, model_config),
         total=total_segments,
+        desc="Aligning " + label,
+        color="MAGENTA",
     )
     for name, text_raw, wave in iterator:
-        mels = preprocess(wave).to(device)
-        text = text_cleaner("$" + text_raw + "$")
-        text = torch.tensor(text).to(device).unsqueeze(0)
-        mels = rearrange(mels, "b f t -> b t f")
-        mel_lengths = torch.zeros([1], dtype=int, device=device)
-        mel_lengths[0] = mels.shape[1]
-        prediction, _ = aligner(mels, mel_lengths)
-        prediction = rearrange(prediction, "t b k -> b t k")
-
-        text_lengths = torch.zeros([1], dtype=int, device=device)
-        text_lengths[0] = text.shape[1]
-
-        alignment, scores = torch_align(
-            mels, text, mel_lengths, text_lengths, prediction, model_config, name
+        alignment, score = calculate_alignment_single(
+            train, aligner, model_config, name, text_raw, wave, device
         )
-        # alignment = teytaut_align(mels, text, mel_lengths, text_lengths, prediction)
         alignment_map[name] = alignment
-        scores_map[name] = scores.exp().mean().item()
+        scores_map[name] = score
     return alignment_map, scores_map
+
+
+def calculate_alignment_single(
+    train: TrainContext, aligner, model_config, name, text_raw, wave, device
+):
+    mels, mel_lengths = calculate_mel(
+        torch.from_numpy(wave).float().to(device).unsqueeze(0),
+        train.to_align_mel,
+        train.normalization.mel_log_mean,
+        train.normalization.mel_log_std,
+    )
+    text = train.text_cleaner("$" + text_raw + "$")
+    text = torch.tensor(text).to(device).unsqueeze(0)
+    mels = rearrange(mels, "b f t -> b t f")
+    prediction, _ = aligner(mels, mel_lengths)
+    prediction = rearrange(prediction, "t b k -> b t k")
+
+    text_lengths = torch.zeros([1], dtype=int, device=device)
+    text_lengths[0] = text.shape[1]
+
+    alignment, scores = torch_align(
+        mels, text, mel_lengths, text_lengths, prediction, model_config, name
+    )
+    # alignment = teytaut_align(mels, text, mel_lengths, text_lengths, prediction)
+    return alignment, scores
 
 
 def torch_align(mels, text, mel_length, text_length, prediction, model_config, name):
