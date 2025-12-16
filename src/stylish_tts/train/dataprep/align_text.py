@@ -22,6 +22,8 @@ from stylish_tts.train.dataloader import get_frame_count, get_time_bin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from stylish_tts.train.utils import calculate_mel
 from stylish_tts.train.train_context import TrainContext
+from stylish_tts.train.batch_manager import BatchManager
+import shutil
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +45,22 @@ def align_text(config, model_config):
             f"Alignment does not support mps device. Falling back on cpu training."
         )
 
-    train = TrainContext("alignment", root, config, model_config, logger)
+    # TrainContext requires an output directiary to save tensorboard, normalization, etc
+    stage = "temp"
+    train = TrainContext(stage, root, config, model_config, logger)
+    train.batch_manager = BatchManager(
+        train.config.dataset,
+        train.out_dir,
+        probe_batch_max=1,
+        device=train.config.training.device,
+        accelerator=train.accelerator,
+        multispeaker=train.model_config.multispeaker,
+        text_cleaner=train.text_cleaner,
+        stage=stage,
+        epoch=train.manifest.current_epoch,
+        train=train,
+    )
+    train.init_normalization()
     train.to_align_mel = train.to_align_mel.to(device)
 
     aligner_dict = load_file(model, device=device)
@@ -85,6 +102,8 @@ def align_text(config, model_config):
             f.write(str(scores[name]) + " " + name + "\n")
     result = vals | trains
     save_file(result, out)
+    # Remove temporary output directoary
+    shutil.rmtree(train.out_dir)
 
 
 def tqdm_wrapper(iterable, total=None, desc="", color="GREEN"):
@@ -121,11 +140,11 @@ def calculate_alignments(
         color="MAGENTA",
     )
     for name, text_raw, wave in iterator:
-        alignment, score = calculate_alignment_single(
+        alignment, scores = calculate_alignment_single(
             train, aligner, model_config, name, text_raw, wave, device
         )
         alignment_map[name] = alignment
-        scores_map[name] = score
+        scores_map[name] = scores.exp().mean().item()
     return alignment_map, scores_map
 
 
