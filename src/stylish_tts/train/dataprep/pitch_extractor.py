@@ -8,7 +8,7 @@ from torch.nn import functional as F
 import librosa
 
 from safetensors.torch import save_file
-from stylish_tts.train.dataprep.align_text import audio_list
+from stylish_tts.train.dataprep.align_text import audio_list, tqdm_wrapper
 import pyworld
 import tqdm
 from stylish_tts.train.dataloader import get_frame_count, get_time_bin
@@ -61,14 +61,11 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
         total_segments = sum(1 for _ in f)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {}
-        iterator = tqdm.tqdm(
-            iterable=audio_list(path, wavdir, model_config),
-            desc="Pitch prep " + label,
-            unit="segments",
-            initial=0,
-            colour="GREEN",
-            dynamic_ncols=True,
+        iterator = tqdm_wrapper(
+            audio_list(path, wavdir, model_config),
             total=total_segments,
+            desc="Pitch prep " + label,
+            color="GREEN",
         )
         for name, text_raw, wave in iterator:
             future_map[
@@ -85,14 +82,11 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
             ] = name
 
         result = {}
-        iterator = tqdm.tqdm(
-            iterable=as_completed(future_map),
-            desc="Pitch " + label,
-            unit="segments",
-            initial=0,
-            colour="MAGENTA",
-            dynamic_ncols=True,
+        iterator = tqdm_wrapper(
+            as_completed(future_map),
             total=total_segments,
+            desc="Pitch " + label,
+            color="MAGENTA",
         )
         for future in iterator:
             name = future_map[future]
@@ -124,11 +118,8 @@ def calculate_pitch_pyworld(
 
 def calculate_pitch_rmvpe(name, text_raw, wave, sample_rate, hop_length, model, device):
     zero_value = -10
-    wave_16k = librosa.resample(
-        wave, orig_sr=sample_rate, target_sr=16000, res_type="kaiser_best"
-    )
     pitch = (
-        torch.from_numpy(model.infer_from_audio(wave_16k, sample_rate=16000, device=device))
+        torch.from_numpy(model.infer_from_audio(wave, sample_rate=sample_rate, device=device))
         .float()
         .unsqueeze(0)
     )
