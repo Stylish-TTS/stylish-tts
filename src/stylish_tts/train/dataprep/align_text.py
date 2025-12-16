@@ -30,6 +30,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
 def align_text(config, model_config):
     root = pathlib.Path(config.dataset.path)
 
@@ -43,7 +44,7 @@ def align_text(config, model_config):
         )
 
     train = TrainContext("alignment", root, config, model_config, logger)
-    train.to_align_mel = train.to_align_mel.to(device)  
+    train.to_align_mel = train.to_align_mel.to(device)
 
     aligner_dict = load_file(model, device=device)
     aligner = tdnn_blstm_ctc_model_base(
@@ -63,7 +64,9 @@ def align_text(config, model_config):
         model_config,
         device,
     )
-    with open(pathlib.Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8") as f:
+    with open(
+        pathlib.Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8"
+    ) as f:
         for name in scores.keys():
             f.write(str(scores[name]) + " " + name + "\n")
     trains, scores = calculate_alignments(
@@ -75,13 +78,16 @@ def align_text(config, model_config):
         model_config,
         device,
     )
-    with open(pathlib.Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8") as f:
+    with open(
+        pathlib.Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8"
+    ) as f:
         for name in scores.keys():
             f.write(str(scores[name]) + " " + name + "\n")
     result = vals | trains
     save_file(result, out)
 
-def tqdm_wrapper(iterable, total=None, desc='', color="GREEN"):
+
+def tqdm_wrapper(iterable, total=None, desc="", color="GREEN"):
     return tqdm.tqdm(
         iterable=iterable,
         desc=desc,
@@ -92,13 +98,20 @@ def tqdm_wrapper(iterable, total=None, desc='', color="GREEN"):
         total=total,
     )
 
+
 @torch.no_grad()
 def calculate_alignments(
-    train, label, path, wavdir, aligner, model_config, device, workers,
+    train,
+    label,
+    path,
+    wavdir,
+    aligner,
+    model_config,
+    device,
 ):
     alignment_map = {}
     scores_map = {}
-    
+
     with path.open("r", encoding="utf-8") as f:
         total_segments = sum(1 for _ in f)
     iterator = tqdm_wrapper(
@@ -108,12 +121,17 @@ def calculate_alignments(
         color="MAGENTA",
     )
     for name, text_raw, wave in iterator:
-        alignment, score = calculate_alignment_single(train, aligner, model_config, name, text_raw, wave, device)
+        alignment, score = calculate_alignment_single(
+            train, aligner, model_config, name, text_raw, wave, device
+        )
         alignment_map[name] = alignment
         scores_map[name] = score
     return alignment_map, scores_map
 
-def calculate_alignment_single(train: TrainContext, aligner, model_config, name, text_raw, wave, device):
+
+def calculate_alignment_single(
+    train: TrainContext, aligner, model_config, name, text_raw, wave, device
+):
     mels, mel_lengths = calculate_mel(
         torch.from_numpy(wave).float().to(device).unsqueeze(0),
         train.to_align_mel,
@@ -134,6 +152,7 @@ def calculate_alignment_single(train: TrainContext, aligner, model_config, name,
     )
     # alignment = teytaut_align(mels, text, mel_lengths, text_lengths, prediction)
     return alignment, scores
+
 
 def torch_align(mels, text, mel_length, text_length, prediction, model_config, name):
     blank = model_config.text_encoder.tokens

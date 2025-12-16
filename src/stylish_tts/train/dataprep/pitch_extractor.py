@@ -50,7 +50,8 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
 
         model = RMVPE(
             hf_hub_download("stylish-tts/pitch_extractor", "rmvpe.safetensors"),
-            hop_length=SAMPLE_RATE // (model_config.sample_rate // model_config.hop_length)
+            hop_length=SAMPLE_RATE
+            // (model_config.sample_rate // model_config.hop_length),
         )
     elif method == "pyworld":
         calculate_single = calculate_pitch_pyworld
@@ -119,7 +120,9 @@ def calculate_pitch_pyworld(
 def calculate_pitch_rmvpe(name, text_raw, wave, sample_rate, hop_length, model, device):
     zero_value = -10
     pitch = (
-        torch.from_numpy(model.infer_from_audio(wave, sample_rate=sample_rate, device=device))
+        torch.from_numpy(
+            model.infer_from_audio(wave, sample_rate=sample_rate, device=device)
+        )
         .float()
         .unsqueeze(0)
     )
