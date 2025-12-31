@@ -10,7 +10,8 @@ from safetensors import safe_open
 
 
 class RMVPE:
-    def __init__(self, model_path, hop_length=160):
+    def __init__(self, model_path, device, hop_length=160):
+        self.device = device
         self.resample_kernel = {}
         model = E2E0(4, 1, (2, 2))
         checkpoint = {}
@@ -19,10 +20,10 @@ class RMVPE:
                 checkpoint[k] = f.get_tensor(k)
         model.load_state_dict(checkpoint)
         model.eval()
-        self.model = model
+        self.model = model.to(device)
         self.mel_extractor = MelSpectrogram(
             N_MELS, SAMPLE_RATE, WINDOW_LENGTH, hop_length, None, MEL_FMIN, MEL_FMAX
-        )
+        ).to(device)
         self.resample_kernel = {}
 
     def mel2hidden(self, mel):
@@ -44,7 +45,7 @@ class RMVPE:
     def infer_from_audio(
         self, audio, *, sample_rate, device, thred=0.03, use_viterbi=False
     ):
-        audio = torch.from_numpy(audio).float().unsqueeze(0).to(device)
+        audio = torch.from_numpy(audio).float().unsqueeze(0).to(self.device)
         if sample_rate == 16000:
             audio_res = audio
         else:
@@ -52,11 +53,9 @@ class RMVPE:
             if key_str not in self.resample_kernel:
                 self.resample_kernel[key_str] = Resample(
                     sample_rate, 16000, lowpass_filter_width=128
-                )
-            self.resample_kernel[key_str] = self.resample_kernel[key_str].to(device)
+                ).to(self.device)
             audio_res = self.resample_kernel[key_str](audio)
-        mel_extractor = self.mel_extractor.to(device)
-        self.model = self.model.to(device)
+        mel_extractor = self.mel_extractor
         mel = mel_extractor(audio_res, center=True)
         hidden = self.mel2hidden(mel)
         f0 = self.decode(hidden, thred=thred, use_viterbi=use_viterbi)
