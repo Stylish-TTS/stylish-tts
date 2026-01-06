@@ -104,6 +104,15 @@ class AcousticStep:
             # self.pitch = normalize_log2(
             #     self.pitch, train.f0_log2_mean, train.f0_log2_std
             # )
+            self.speaker_emb = train.speaker_embedder(batch.audio_gt)
+            self.phones, *_ = train.hubert(
+                batch.audio_gt, train.model_config.coarse_multiplier
+            )
+            current_step = (
+                train.manifest.current_step
+                + (train.manifest.current_epoch - 1) * train.manifest.steps_per_epoch
+            )
+            train_student = current_step > train.config.training.val_interval
 
         if alignment is None:
             alignment = train.duration_processor.duration_to_alignment(
@@ -114,9 +123,10 @@ class AcousticStep:
                 multiplier=train.model_config.coarse_multiplier,
             )
         if use_predicted_pe:
-            self.pe_style = train.model.pe_style_encoder(
-                self.style_mel, self.pitch, self.energy
-            )
+            self.pe_style = train.model.pe_style_encoder(self.speaker_emb)
+            # self.pe_style = train.model.pe_style_encoder(
+            #     self.style_mel, self.pitch, self.energy
+            # )
             self.pred_pitch, self.pred_energy = train.model.pitch_energy_predictor(
                 batch.text,
                 batch.text_length,
@@ -130,9 +140,10 @@ class AcousticStep:
             )
 
         if predict_audio:
-            self.speech_style = train.model.speech_style_encoder(
-                self.style_mel.unsqueeze(1)
-            )
+            # self.speech_style = train.model.speech_style_encoder(
+            #     self.style_mel.unsqueeze(1)
+            # )
+            self.speech_style = train.model.speech_style_encoder(self.speaker_emb)
             # voiced = self.voiced
             pitch = self.pitch
             energy = self.energy
@@ -150,15 +161,18 @@ class AcousticStep:
             # pitch = torch.log(torch.abs(pitch) + 1)
             # pitch = pitch * voiced
             # base_pitch = base_pitch * voiced
-            self.pred = train.model.speech_predictor(
-                batch.text,
-                batch.text_length,
-                alignment_fine,
+            self.pred, self._distil_loss = train.model.speech_predictor(
+                self.phones,
+                # batch.text,
+                # batch.text_length,
+                # alignment_fine,
                 pitch,
                 energy,
                 voiced,
                 self.speech_style,
                 base_pitch,
+                prior_mel=self.mel,
+                train_student=train_student,
             )
             (
                 self.target_spec,
@@ -255,6 +269,13 @@ class AcousticStep:
         #     "voiced",
         #     torch.nn.functional.binary_cross_entropy(self.pred_voiced, self.voiced),
         # )
+
+    def distil_loss(self):
+        if self._distil_loss is not None:
+            self.log.add_loss(
+                "distil",
+                self._distil_loss,
+            )
 
 
 ##### Alignment #####
@@ -353,10 +374,11 @@ def train_acoustic(
     train.stage.optimizer.zero_grad()
 
     step.mel_loss()
-    step.multi_phase_loss()
+    # step.multi_phase_loss()
     step.generator_loss(disc_index)
-    step.slm_loss()
+    # step.slm_loss()
     step.magphase_loss()
+    step.distil_loss()
 
     train.accelerator.backward(log.backwards_loss())
     return log.detach(), detach_all(step.target_fft), detach_all(step.pred_fft)
@@ -475,16 +497,18 @@ stages["textual"] = StageType(
 def train_duration(
     batch, model, train, probing, disc_index
 ) -> Tuple[LossLog, Optional[torch.Tensor]]:
-    style_mel, _ = calculate_mel(
-        batch.audio_gt,
-        train.to_style_mel,
-        train.normalization.mel_log_mean,
-        train.normalization.mel_log_std,
-    )
+    # style_mel, _ = calculate_mel(
+    #     batch.audio_gt,
+    #     train.to_style_mel,
+    #     train.normalization.mel_log_mean,
+    #     train.normalization.mel_log_std,
+    # )
+    speaker_emb = train.speaker_embedder(batch.audio_gt)
 
     target_dur = batch.alignment[:, 0, :].long()
     targets = train.duration_processor.dur_to_class(target_dur)
-    duration_style = model.duration_style_encoder(style_mel.unsqueeze(1))
+    # duration_style = model.duration_style_encoder(style_mel.unsqueeze(1))
+    duration_style = train.model.pe_style_encoder(speaker_emb)
     duration_raw = model.duration_predictor(
         batch.text, batch.text_length, duration_style
     )
@@ -540,15 +564,18 @@ def validate_duration(batch, train):
         train.normalization.mel_log_std,
     ).squeeze(1)
     energy = torch.log(energy + 1e-9)
-    style_mel, _ = calculate_mel(
-        batch.audio_gt,
-        train.to_style_mel,
-        train.normalization.mel_log_mean,
-        train.normalization.mel_log_std,
-    )
+    # style_mel, _ = calculate_mel(
+    #     batch.audio_gt,
+    #     train.to_style_mel,
+    #     train.normalization.mel_log_mean,
+    #     train.normalization.mel_log_std,
+    # )
+    speaker_emb = train.speaker_embedder(batch.audio_gt)
+
     target_dur = batch.alignment[:, 0, :].long()
     targets = train.duration_processor.dur_to_class(target_dur)
-    duration_style = train.model.duration_style_encoder(style_mel.unsqueeze(1))
+    # duration_style = train.model.duration_style_encoder(style_mel.unsqueeze(1))
+    duration_style = train.model.pe_style_encoder(speaker_emb)
     duration_raw = train.model.duration_predictor(
         batch.text, batch.text_length, duration_style
     )
@@ -557,8 +584,10 @@ def validate_duration(batch, train):
         duration_raw, batch.text_length
     )
 
-    pe_mel_style = train.model.pe_style_encoder(style_mel, batch.pitch, energy)
-    speech_style = train.model.speech_style_encoder(style_mel.unsqueeze(1))
+    # pe_mel_style = train.model.pe_style_encoder(style_mel, batch.pitch, energy)
+    # speech_style = train.model.speech_style_encoder(style_mel.unsqueeze(1))
+    pe_mel_style = train.model.pe_style_encoder(speaker_emb)
+    speech_style = train.model.speech_style_encoder(speaker_emb)
 
     results = []
     duration_loss = 0
@@ -605,27 +634,120 @@ def validate_duration(batch, train):
     return log.detach(), alignment[0], results, batch.audio_gt
 
 
+# stages["duration"] = StageType(
+#     next_stage=None,
+#     train_fn=train_duration,
+#     validate_fn=validate_duration,
+#     train_models=[
+#         "duration_predictor",
+#         "duration_style_encoder",
+#     ],
+#     eval_models=[
+#         "pitch_energy_predictor",
+#         "pe_style_encoder",
+#         "speech_predictor",
+#         "speech_style_encoder",
+#     ],
+#     discriminators=["dur_disc"],
+#     inputs=[
+#         "text",
+#         "text_length",
+#         "audio_gt",
+#         "pitch",
+#         "alignment",
+#     ],
+# )
+
+from stylish_tts.train.multi_spectrogram import MultiSpectrogram
+
+
+def train_focal(batch, model, train, probing, disc_index):
+    with torch.no_grad():
+        train.focal_codec.remove_encoder()
+        train.vevo_codec.remove_encoder()
+        speaker_emb = train.speaker_embedder(batch.audio_gt)
+        phones, *_ = train.hubert(batch.audio_gt, 1)
+        # speech_style = model.speech_style_encoder(speaker_emb)
+        acoustic, semantic = batch.focal_codes, phones.mT
+        noisy_acoustic, corrupt_mask, t = model.focal_code_predictor.make_noisy_sample(
+            acoustic
+        )
+        prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
+
+    logits = model.focal_code_predictor(noisy_acoustic, semantic, speaker_emb, t)
+    train.stage.optimizer.zero_grad()
+    log = build_loss_log(train)
+    loss = F.cross_entropy(
+        rearrange(logits, "b t c -> (b t) c"),
+        rearrange(acoustic, "b t -> (b t)"),
+        reduction="none",
+    )
+    loss_mask = rearrange(corrupt_mask, "b t -> (b t)")
+    loss = (loss * loss_mask).sum() / (loss_mask.sum() + 1e-6)
+    log.add_loss("focal_match", loss)
+    train.accelerator.backward(log.backwards_loss())
+
+    return log.detach(), None, None
+
+
+@torch.no_grad()
+def validate_focal(batch, train):
+    model = train.model
+    with torch.no_grad():
+        train.focal_codec.remove_encoder()
+        train.vevo_codec.remove_encoder()
+        speaker_emb = train.speaker_embedder(batch.audio_gt)
+        phones, *_ = train.hubert(batch.audio_gt, 1)
+        # speech_style = model.speech_style_encoder(speaker_emb)
+        multi_spectrogram = MultiSpectrogram(sample_rate=16_000)
+        prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
+        acoustic, semantic = batch.focal_codes, phones.mT
+        # if semantic.shape[-1] > 50*3:
+        #     prompt_semantic = semantic[:, 50*2:50*3, :]
+        #     prompt_acoustic = acoustic[:, 50*2:50*3]
+        # else:
+        prompt_semantic = semantic
+        prompt_acoustic = acoustic
+
+    pred_codes = model.focal_code_predictor.generate(
+        prompt_semantic, prompt_acoustic, semantic, speaker_emb
+    )
+    pred_audio = train.focal_codec.decode(pred_codes)
+    (
+        target_spec,
+        pred_spec,
+        target_phase,
+        pred_phase,
+        target_fft,
+        pred_fft,
+    ) = multi_spectrogram(
+        target=torchaudio.functional.resample(
+            batch.audio_gt, train.model_config.sample_rate, 16_000
+        ),
+        pred=pred_audio,
+    )
+    pred_audio = torchaudio.functional.resample(
+        pred_audio, 16_000, train.model_config.sample_rate
+    )
+    log = build_loss_log(train)
+    train.stft_loss(target_list=target_spec, pred_list=pred_spec, log=log)
+    return log.detach(), None, pred_audio, batch.audio_gt
+
+
 stages["duration"] = StageType(
     next_stage=None,
-    train_fn=train_duration,
-    validate_fn=validate_duration,
+    train_fn=train_focal,
+    validate_fn=validate_focal,
     train_models=[
-        "duration_predictor",
-        "duration_style_encoder",
+        "focal_code_predictor",
     ],
-    eval_models=[
-        "pitch_energy_predictor",
-        "pe_style_encoder",
-        "speech_predictor",
-        "speech_style_encoder",
-    ],
-    discriminators=["dur_disc"],
+    eval_models=[],
+    discriminators=[],
     inputs=[
-        "text",
-        "text_length",
         "audio_gt",
         "pitch",
-        "alignment",
+        "focal_codes",
+        "vevo_codes",
     ],
 )
 

@@ -65,7 +65,7 @@ class LossLog:
         if key in self.weight_dict:
             return self.weight_dict[key]
         else:
-            logging.error(f"WARNING: Unknown weight for key {key}, defaulting to 1")
+            # logging.error(f"WARNING: Unknown weight for key {key}, defaulting to 1")
             logging.debug(f"self.weights: {self.weights}")
             return 1
 

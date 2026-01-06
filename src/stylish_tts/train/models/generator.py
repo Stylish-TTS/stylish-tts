@@ -516,8 +516,8 @@ class Generator(torch.nn.Module):
     ):
         super(Generator, self).__init__()
 
-        self.scale = 2
-        self.scalehop = 3
+        self.scale = 1
+        self.scalehop = 1
         # self.prior_generator = partial(
         #     generate_pcph,
         #     hop_length=hop_length,
@@ -701,13 +701,13 @@ class Generator(torch.nn.Module):
         logamp = self.amp_final_layer_norm(logamp)
         logamp = logamp.transpose(1, 2)
         logamp = self.amp_output_conv(logamp)
-        logamp = torch.nn.functional.interpolate(
-            logamp, scale_factor=self.scalehop, mode="linear"
-        )
+        # logamp = torch.nn.functional.interpolate(
+        #     logamp, scale_factor=self.scalehop, mode="linear"
+        # )
 
-        phase_in = torch.nn.functional.interpolate(
-            phase_in, scale_factor=self.scalehop, mode="linear"
-        )
+        # phase_in = torch.nn.functional.interpolate(
+        #     phase_in, scale_factor=self.scalehop, mode="linear"
+        # )
         phase_in = torch.cat([phase_in, logamp_prior, phase_prior], dim=1)
         phase = self.phase_input_conv(phase_in)
         phase = phase.transpose(1, 2)

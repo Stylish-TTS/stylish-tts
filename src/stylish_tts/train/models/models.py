@@ -14,7 +14,7 @@ from .mel_style_encoder import MelStyleEncoder, PitchStyleEncoder
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .speech_predictor import SpeechPredictor
 from .pitch_discriminator import PitchDiscriminator
-from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
+from .token_predictor import TokenPredictor
 
 from munch import Munch
 
@@ -44,25 +44,44 @@ def build_model(model_config: ModelConfig):
         pitch_energy_config=model_config.pitch_energy_predictor,
     )
 
-    speech_style_encoder = MelStyleEncoder(
-        model_config.style_encoder.n_mels,
-        model_config.style_dim,
-        model_config.style_encoder.max_channels,
-        model_config.style_encoder.skip_downsample,
-    )
-    pe_style_encoder = PitchStyleEncoder(
-        model_config.style_encoder.n_mels,
-        model_config.style_dim,
-        model_config.style_encoder.max_channels,
-        model_config.style_encoder.skip_downsample,
-        coarse_multiplier=model_config.coarse_multiplier,
-    )
-    duration_style_encoder = MelStyleEncoder(
-        model_config.style_encoder.n_mels,
-        model_config.style_dim,
-        model_config.style_encoder.max_channels,
-        model_config.style_encoder.skip_downsample,
-    )
+    # speech_style_encoder = MelStyleEncoder(
+    #     model_config.style_encoder.n_mels,
+    #     model_config.style_dim,
+    #     model_config.style_encoder.max_channels,
+    #     model_config.style_encoder.skip_downsample,
+    # )
+    # pe_style_encoder = PitchStyleEncoder(
+    #     model_config.style_encoder.n_mels,
+    #     model_config.style_dim,
+    #     model_config.style_encoder.max_channels,
+    #     model_config.style_encoder.skip_downsample,
+    #     coarse_multiplier=model_config.coarse_multiplier,
+    # )
+    # duration_style_encoder = MelStyleEncoder(
+    #     model_config.style_encoder.n_mels,
+    #     model_config.style_dim,
+    #     model_config.style_encoder.max_channels,
+    #     model_config.style_encoder.skip_downsample,
+    # )
+
+    # speech_style_encoder = torch.nn.Sequential(
+    #     ASP(64, 80),
+    #     torch.nn.Linear(64 * 80 * 2, model_config.style_dim)
+    # )
+
+    # pe_style_encoder = torch.nn.Sequential(
+    #     ASP(64, 80),
+    #     torch.nn.Linear(64 * 80 * 2, model_config.style_dim)
+    # )
+
+    # duration_style_encoder = torch.nn.Sequential(
+    #     ASP(64, 80),
+    #     torch.nn.Linear(64 * 80 * 2, model_config.style_dim)
+    # )
+
+    speech_style_encoder = torch.nn.Linear(64 * 80 * 2, model_config.style_dim)
+    pe_style_encoder = torch.nn.Linear(64 * 80 * 2, model_config.style_dim)
+    duration_style_encoder = torch.nn.Linear(64 * 80 * 2, model_config.style_dim)
 
     nets = Munch(
         text_aligner=text_aligner,
@@ -77,6 +96,9 @@ def build_model(model_config: ModelConfig):
         duration_style_encoder=duration_style_encoder,
         pitch_disc=PitchDiscriminator(dim_in=2, dim_hidden=64, kernel=21),
         dur_disc=PitchDiscriminator(dim_in=1, dim_hidden=64, kernel=5),
+        focal_code_predictor=TokenPredictor(
+            model_config.inter_dim, model_config.style_dim
+        ),
     )
 
     return nets

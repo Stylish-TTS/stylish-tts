@@ -22,6 +22,13 @@ from stylish_tts.train.utils import DurationProcessor
 from stylish_tts.train.multi_spectrogram import MultiSpectrogram
 from pathlib import Path
 import traceback
+from stylish_tts.train.models.pretrained import (
+    SpeakerEmbeddingModel,
+    AdaptiveHubert,
+    AdaptiveFocalCodec,
+    AdaptiveEmotion2Vec,
+    AdaptiveVevoCodec,
+)
 
 
 class Manifest:
@@ -140,9 +147,9 @@ class TrainContext:
         # ).to(self.config.training.device)
         # TODO: Remove hardcoded valude
         self.magphase_loss: MagPhaseLoss = MagPhaseLoss(
-            n_fft=self.model_config.n_fft // 2,
-            hop_length=self.model_config.hop_length // 3,
-            win_length=self.model_config.win_length // 2,
+            n_fft=self.model_config.n_fft,
+            hop_length=self.model_config.hop_length,
+            win_length=self.model_config.win_length,
         ).to(self.config.training.device)
         self.duration_loss: DurationLoss = None
 
@@ -180,6 +187,32 @@ class TrainContext:
         self.pe_style_dict = {}
         self.pe_style_sequence = None
         self.pe_knn = None
+
+        self.speaker_embedder = (
+            SpeakerEmbeddingModel(self.model_config.sample_rate)
+            .to(self.config.training.device)
+            .eval()
+        )
+        self.hubert = (
+            AdaptiveHubert("lengyue233/content-vec-best", self.model_config.sample_rate)
+            .to(self.config.training.device)
+            .eval()
+        )
+        self.emotion2vec = (
+            AdaptiveEmotion2Vec(self.model_config.sample_rate)
+            .to(self.config.training.device)
+            .eval()
+        )
+        self.focal_codec = (
+            AdaptiveFocalCodec(self.model_config.sample_rate)
+            .to(self.config.training.device)
+            .eval()
+        )
+        self.vevo_codec = (
+            AdaptiveVevoCodec(self.model_config.sample_rate)
+            .to(self.config.training.device)
+            .eval()
+        )
 
     def reset_out_dir(self, stage_name):
         self.out_dir = osp.join(self.base_output_dir, stage_name)

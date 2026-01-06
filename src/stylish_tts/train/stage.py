@@ -22,6 +22,28 @@ from stylish_tts.train.utils import (
 )
 
 
+def count_parameters(model, train_models):
+    from prettytable import PrettyTable
+    from collections import defaultdict
+
+    table = PrettyTable(["Module", "Parameters (M)"])
+    summary = defaultdict(float)
+    total_params = 0
+    for name, model in model.items():
+        for _, parameter in model.named_parameters():
+            module = name
+            summary[module] += parameter.numel() / 1_000_000
+            if module in train_models:
+                total_params += parameter.numel() / 1_000_000
+
+    for module, params in summary.items():
+        table.add_row([module, f"{params:.3}M"])
+
+    print(table)
+    print(f"Total Trainable Params: {total_params:,.2f}M")
+    return total_params
+
+
 class Stage:
     def __init__(
         self, name: str, train, train_time_bins: dict, val_time_bins: dict
@@ -41,6 +63,7 @@ class Stage:
         self.validate_fn: Callable = stages[name].validate_fn
         self.optimizer = build_optimizer(self.name, train=train)
         self.optimizer.prepare(train.accelerator)
+        count_parameters(train.model, stages[name].train_models)
 
     def begin_stage(self, name, train):
         self.name = name
@@ -327,6 +350,9 @@ batch_names = [
     "path",
     "pitch",
     "alignment",
+    "focal_codes",
+    "vevo_codes",
+    "speaker_id",
 ]
 
 

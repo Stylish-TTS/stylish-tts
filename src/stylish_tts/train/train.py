@@ -127,17 +127,17 @@ def train_model(
         exit(
             f"Root wav path not found at {train.data_path(train.config.dataset.wav_path)}"
         )
-    if not osp.exists(train.data_path(train.config.dataset.pitch_path)):
-        exit(
-            f"Pitch path not found at {train.data_path(train.config.dataset.pitch_path)}"
-        )
-    if (
-        not osp.exists(train.data_path(train.config.dataset.alignment_path))
-        and stage != "alignment"
-    ):
-        exit(
-            f"Alignment path not found at {train.data_path(train.config.dataset.alignment_path)}"
-        )
+    # if not osp.exists(train.data_path(train.config.dataset.pitch_path)):
+    #     exit(
+    #         f"Pitch path not found at {train.data_path(train.config.dataset.pitch_path)}"
+    #     )
+    # if (
+    #     not osp.exists(train.data_path(train.config.dataset.alignment_path))
+    #     and stage != "alignment"
+    # ):
+    #     exit(
+    #         f"Alignment path not found at {train.data_path(train.config.dataset.alignment_path)}"
+    #     )
     val_list = get_data_path_list(train.data_path(train.config.dataset.val_data))
     # force somewhat determanistic selection of validation samples
     hashed_data = []

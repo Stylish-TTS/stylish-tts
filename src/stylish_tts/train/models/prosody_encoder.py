@@ -19,7 +19,7 @@ class ProsodyEncoder(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        hidden_channels = d_model + sty_dim
+        hidden_channels = d_model
         self.n_heads = n_heads
         self.n_layers = nlayers
         self.kernel_size = kernel_size
@@ -60,12 +60,12 @@ class ProsodyEncoder(nn.Module):
             )
             self.proj_layers.append(nn.Conv1d(hidden_channels, d_model, 1))
 
-    def forward(self, x, style, x_lengths):
-        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
-        attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
+    def forward(self, x, style):
+        # x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+        # attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
+        x_mask = 1
+        attn_mask = None
         s = style
-        style = style.unsqueeze(2).expand(x.shape[0], -1, x.shape[2])
-        x = torch.cat([x, style], dim=1)
         for i in range(self.n_layers):
             x = x * x_mask
             y = self.attn_layers[i](x, x, attn_mask)
@@ -76,6 +76,5 @@ class ProsodyEncoder(nn.Module):
             y = self.drop(y)
             x = self.norm_layers_2[i]((x + y).transpose(1, 2), s).transpose(1, 2)
             x = self.proj_layers[i](x)
-            x = torch.cat([x, style], dim=1)
         x = x * x_mask
-        return x.transpose(-1, -2)
+        return x
