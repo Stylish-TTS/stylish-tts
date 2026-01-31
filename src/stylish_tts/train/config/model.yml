@@ -42,7 +42,7 @@ generator:
   conv_intermediate_dim: 768
   io_conv_kernel_size: 7
   conformer_layers: 1
-  conv_layers: 4
+  conv_layers: 8
 
 text_encoder:
   tokens: 178 # number of phoneme tokens

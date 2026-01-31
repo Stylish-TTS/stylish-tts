@@ -156,13 +156,14 @@ class MagPhaseLoss(torch.nn.Module):
 
 
 class DiscriminatorLoss(torch.nn.Module):
-    def __init__(self, *, mrd0, mrd1, mrd2, pitch, duration):
+    def __init__(self, *, mrd0, mrd1, mrd2, disc, pitch, duration):
         super(DiscriminatorLoss, self).__init__()
         self.discriminators = torch.nn.ModuleDict(
             {
                 "mrd0": DiscriminatorLossHelper(mrd0, 1),  # multi_spectrogram_count),
                 "mrd1": DiscriminatorLossHelper(mrd1, 1),  # multi_spectrogram_count),
                 "mrd2": DiscriminatorLossHelper(mrd2, 1),  # multi_spectrogram_count),
+                "disc": DiscriminatorLossHelper(disc, 1),
                 "pitch_disc": DiscriminatorLossHelper(pitch, 1),
                 "dur_disc": DiscriminatorLossHelper(duration, 1),
             }
@@ -171,6 +172,7 @@ class DiscriminatorLoss(torch.nn.Module):
             self.discriminators["mrd0"],
             self.discriminators["mrd1"],
             self.discriminators["mrd2"],
+            self.discriminators["disc"],
             self.discriminators["pitch_disc"],
             self.discriminators["dur_disc"],
         ]
@@ -178,7 +180,7 @@ class DiscriminatorLoss(torch.nn.Module):
     def get_disc_lr_multiplier(self, key):
         return self.discriminators[key].get_disc_lr_multiplier()
 
-    def forward(self, *, target_list, pred_list, used, index):
+    def forward(self, *, target_list, pred_list, target_audio, pred_audio, used, index):
         if "pitch_disc" in used:
             loss = self.discriminators["pitch_disc"](
                 target=target_list[0], pred=pred_list[0]
@@ -188,8 +190,14 @@ class DiscriminatorLoss(torch.nn.Module):
                 target=target_list[0], pred=pred_list[0]
             )
         else:
-            loss = self.disc_list[index](
-                target=target_list[index], pred=pred_list[index]
+            # loss = self.disc_list[index](
+            #     target=target_list[index], pred=pred_list[index]
+            # )
+            loss = 0
+            for i in range(0, 3):
+                loss += self.disc_list[i](target=target_list[i], pred=pred_list[i])
+            loss += 5 * self.discriminators["disc"](
+                target=target_audio, pred=pred_audio
             )
         # loss = 0
         # for key in used:
@@ -223,7 +231,7 @@ class DiscriminatorLossHelper(torch.nn.Module):
         self.last_loss = 0.5 * sub_count
         self.ideal_loss = 0.5 * sub_count
         self.f_max = 4.0
-        self.h_min = 0.01
+        self.h_min = 0.003
         self.x_max = 0.05 * sub_count
         self.x_min = 0.05 * sub_count
 
@@ -281,13 +289,14 @@ class DiscriminatorLossHelper(torch.nn.Module):
 
 
 class GeneratorLoss(torch.nn.Module):
-    def __init__(self, *, mrd0, mrd1, mrd2, pitch, duration):
+    def __init__(self, *, mrd0, mrd1, mrd2, disc, pitch, duration):
         super(GeneratorLoss, self).__init__()
         self.generators = torch.nn.ModuleDict(
             {
                 "mrd0": GeneratorLossHelper(mrd0),
                 "mrd1": GeneratorLossHelper(mrd1),
                 "mrd2": GeneratorLossHelper(mrd2),
+                "disc": GeneratorLossHelper(disc),
                 "pitch_disc": GeneratorLossHelper(pitch),
                 "dur_disc": GeneratorLossHelper(duration),
             }
@@ -296,11 +305,12 @@ class GeneratorLoss(torch.nn.Module):
             self.generators["mrd0"],
             self.generators["mrd1"],
             self.generators["mrd2"],
+            self.generators["disc"],
             self.generators["pitch_disc"],
             self.generators["dur_disc"],
         ]
 
-    def forward(self, *, target_list, pred_list, used, index):
+    def forward(self, *, target_list, pred_list, target_audio, pred_audio, used, index):
         if "pitch_disc" in used:
             loss = self.generators["pitch_disc"](
                 target=target_list[0], pred=pred_list[0]
@@ -308,9 +318,13 @@ class GeneratorLoss(torch.nn.Module):
         elif "dur_disc" in used:
             loss = self.generators["dur_disc"](target=target_list[0], pred=pred_list[0])
         else:
-            loss = self.gen_list[index](
-                target=target_list[index], pred=pred_list[index]
-            )
+            # loss = self.gen_list[index](
+            #     target=target_list[index], pred=pred_list[index]
+            # )
+            loss = 0
+            for i in range(0, 3):
+                loss += self.gen_list[i](target=target_list[i], pred=pred_list[i])
+            loss += 5 * self.generators["disc"](target=target_audio, pred=pred_audio)
         # loss = 0
         # for key in used:
         #     loss += self.generators[key](target_list=target_list, pred_list=pred_list)
@@ -477,7 +491,7 @@ class CTCLossWithLabelPriors(nn.Module):
         self.num_samples = 0
         self.prior_scaling_factor = prior_scaling_factor  # This corresponds to the `alpha` hyper parameter in the paper
         self.k2_device = "cpu"
-    
+
     def to(self, device):
         super().to(device)
         self.k2_device = device if k2.with_cuda else "cpu"
@@ -520,9 +534,7 @@ class CTCLossWithLabelPriors(nn.Module):
             targets, target_lengths, input_lengths
         )
 
-        decoding_graph = k2.ctc_graph(
-            token_ids, modified=False, device=self.k2_device
-        )
+        decoding_graph = k2.ctc_graph(token_ids, modified=False, device=self.k2_device)
 
         # Accumulate label priors for this epoch
         log_probs = log_probs.permute(1, 0, 2)  # (T, N, C) -> (N, T, C)
