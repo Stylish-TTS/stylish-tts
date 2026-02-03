@@ -149,7 +149,7 @@ def process(train, aligner, audio_path, text_raw, config, model_config, method, 
 
     tg.extend([phone_tier])
     padded_audo_name = f"padded_{audio_path.split('/')[-1]}"
-    textgrid_name = f"padded_{audio_path.split('/')[-1]}.textgrid"
+    textgrid_name = f"padded_{method}_{audio_path.split('/')[-1]}.textgrid"
     tg.write(textgrid_name)
     soundfile.write(padded_audo_name, wave, model_config.sample_rate)
     print(f"Open \"{padded_audo_name}\" and \"{textgrid_name}\" on Praat (https://www.fon.hum.uva.nl/praat/) to view the alignment.")
