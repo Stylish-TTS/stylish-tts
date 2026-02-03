@@ -29,10 +29,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         alignment_path,
         duration_processor,
     ):
-        self.pitch = {}
-        with safe_open(pitch_path, framework="pt", device="cpu") as f:
-            for key in f.keys():
-                self.pitch[key] = f.get_tensor(key)
+        self.pitch = {"a": torch.rand(1, 100)}
         durations = torch.zeros([16], device="cpu")
         self.alignment = {}
         if osp.isfile(alignment_path):
@@ -176,9 +173,6 @@ class FilePathDataset(torch.utils.data.Dataset):
         wave = torch.from_numpy(wave).float()
 
         text = self.text_cleaner(text)
-
-        text.insert(0, 0)
-        text.append(0)
         text = torch.LongTensor(text)
 
         return (wave, text, speaker_id)

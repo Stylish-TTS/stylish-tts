@@ -23,10 +23,9 @@ class StylishModel:
         return tokens
 
     def generate_speech(self, tokens, styles):
-        texts = np.zeros([1, tokens.shape[1] + 2], dtype=int)
-        texts[0][1 : tokens.shape[1] + 1] = tokens
+        texts = tokens
         text_lengths = np.zeros([1], dtype=int)
-        text_lengths[0] = tokens.shape[1] + 2
+        text_lengths[0] = tokens.shape[1]
         outputs = self.model.run(
             None,
             {
