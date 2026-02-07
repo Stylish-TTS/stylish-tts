@@ -564,6 +564,45 @@ class CTCLossWithLabelPriors(nn.Module):
 
         return loss.to(log_probs.device)
 
+    def forced_align(
+        self,
+        log_probs: Tensor,
+        targets: Tensor,
+        input_lengths: Tensor,
+        target_lengths: Tensor,
+    ):
+        supervision_segments, token_ids, indices = self.encode_supervisions(
+            targets, target_lengths, input_lengths
+        )
+
+        decoding_graph = k2.ctc_graph(token_ids, modified=False, device=self.k2_device)
+
+        # Compute CTC loss
+        dense_fsa_vec = k2.DenseFsaVec(
+            log_probs.to(self.k2_device),  # (N, T, C)
+            supervision_segments.to(self.k2_device),
+        )
+        lattices = k2.intersect_dense(
+            decoding_graph,
+            dense_fsa_vec,
+            output_beam=10,
+        )
+
+        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        tot_scores = best_paths.get_tot_scores(
+            log_semiring=True, use_double_scores=True
+        )
+        scores = tot_scores / target_lengths.to(tot_scores.device)
+
+        batch_arc_shape = best_paths.arcs.shape().remove_axis(1)
+        batch_frame_labels = k2.RaggedTensor(
+            batch_arc_shape, best_paths.aux_labels
+        ).tolist()
+        # k2 makes an extra frame for some reasons
+        for i in range(len(batch_frame_labels)):
+            batch_frame_labels[i][-1] -= 1
+        return batch_frame_labels, scores
+
     def on_train_epoch_end(self, train):
         if self.log_priors_sum is not None:
             log_priors_sums = train.accelerator.gather(self.log_priors_sum.unsqueeze(0))

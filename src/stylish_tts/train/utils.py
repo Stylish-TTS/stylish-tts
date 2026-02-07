@@ -489,57 +489,76 @@ class DurationProcessor(torch.nn.Module):
         dur = softdur * mask
         return dur
 
+    # def duration_to_alignment(
+    #     self, duration: torch.Tensor, multiplier=1
+    # ) -> torch.Tensor:
+    #     """Convert a sequence of duration values to an attention matrix.
+
+    #     duration -- [t]ext length
+    #     result -- [t]ext length x [a]udio length"""
+    #     total_dur = duration.sum(dim=1).round().max().long().item()
+    #     total_dur = total_dur * multiplier
+    #     duration = duration * multiplier
+
+    #     upper_bound = torch.cumsum(duration, dim=1)
+    #     lower_bound = upper_bound - duration
+    #     mean = (lower_bound + upper_bound) / 2
+    #     mean = mean.unsqueeze(2)
+
+    #     sequence = torch.arange(round(total_dur)).unsqueeze(0).unsqueeze(1)
+    #     sequence = sequence.to(duration.device)
+    #     x = sequence - mean
+    #     alignment = torch.zeros_like(x)
+
+    #     alignment = 1 - (x * 2 / (duration.unsqueeze(2) + 6)) ** 2
+    #     # for i in range(5):
+    #     #     power = i
+    #     #     coefficient = coefficient_list[:, i, :].unsqueeze(2)
+    #     #     # Coefficients are normalized for a domain of -1, 1.
+    #     #     # We need to scale them to a domain of -duration/2, duration/2
+    #     #     alignment = alignment + coefficient * (x * (2 / (duration.unsqueeze(2) + 6))) ** power
+
+    #     # duration = torch.nn.functional.pad(duration, (1, 1))
+    #     lower_bound -= 3
+    #     upper_bound += 3
+    #     mask = (sequence > lower_bound.unsqueeze(2)) * (
+    #         sequence < upper_bound.unsqueeze(2)
+    #     )
+    #     alignment = alignment * mask
+    #     alignment = torch.clamp(alignment, min=0.0)
+
+    #     alignment = torch.softmax(alignment, dim=1)
+    #     return alignment
+
     def duration_to_alignment(
         self, duration: torch.Tensor, multiplier=1
     ) -> torch.Tensor:
-        """Convert a sequence of duration values to an attention matrix.
-
-        duration -- [t]ext length
-        result -- [t]ext length x [a]udio length"""
-        total_dur = duration.sum(dim=1).round().max().long().item()
-        total_dur = total_dur * multiplier
+        """
+        duration: [Batch, Text_Len] (int or float)
+        returns:  [Batch, Text_Len, Max_Audio_Len]
+        """
+        # 1. Determine start and end times for every token
+        # cumsum turns [2, 3] into [2, 5] (end times)
         duration = duration * multiplier
+        ends = torch.cumsum(duration, dim=1)
+        starts = ends - duration
 
-        upper_bound = torch.cumsum(duration, dim=1)
-        lower_bound = upper_bound - duration
-        mean = (lower_bound + upper_bound) / 2
-        mean = mean.unsqueeze(2)
+        # 2. Get the maximum audio length in the batch for the time axis
+        max_len = ends.max().long()
 
-        sequence = torch.arange(round(total_dur)).unsqueeze(0).unsqueeze(1)
-        sequence = sequence.to(duration.device)
-        x = sequence - mean
-        alignment = torch.zeros_like(x)
+        # 3. Create a time grid: [1, 1, Max_Audio_Len]
+        # e.g., [0, 1, 2, 3, 4...]
+        time_axis = torch.arange(max_len, device=duration.device).view(1, 1, -1)
 
-        alignment = 1 - (x * 2 / (duration.unsqueeze(2) + 6)) ** 2
-        # for i in range(5):
-        #     power = i
-        #     coefficient = coefficient_list[:, i, :].unsqueeze(2)
-        #     # Coefficients are normalized for a domain of -1, 1.
-        #     # We need to scale them to a domain of -duration/2, duration/2
-        #     alignment = alignment + coefficient * (x * (2 / (duration.unsqueeze(2) + 6))) ** power
+        # 4. Expand starts/ends for broadcasting: [Batch, Text_Len, 1]
+        starts = starts.unsqueeze(2)
+        ends = ends.unsqueeze(2)
 
-        # duration = torch.nn.functional.pad(duration, (1, 1))
-        lower_bound -= 3
-        upper_bound += 3
-        mask = (sequence > lower_bound.unsqueeze(2)) * (
-            sequence < upper_bound.unsqueeze(2)
-        )
-        alignment = alignment * mask
-        alignment = torch.clamp(alignment, min=0.0)
+        # 5. The "Square Wave" Logic
+        # A token is active if the current time 't' is >= start AND < end
+        mask = (time_axis >= starts) & (time_axis < ends)
 
-        alignment = torch.softmax(alignment, dim=1)
-        return alignment
-
-    # def duration_to_alignment(self, duration: torch.Tensor) -> torch.Tensor:
-    #     indices = torch.repeat_interleave(
-    #         torch.arange(duration.shape[0], device=duration.device),
-    #         duration.to(torch.int),
-    #     )
-    #     result = torch.zeros(
-    #         (duration.shape[0], indices.shape[0]), device=duration.device
-    #     )
-    #     result[indices, torch.arange(indices.shape[0])] = 1
-    #     return result
+        return mask.long()
 
     def forward(self, pred, text_length, multiplier=1):
         duration = self.prediction_to_duration(pred, text_length)

@@ -8,7 +8,8 @@ import pyloudnorm as pyln
 # TODO: Remove torch/safetensors dependency
 import torch
 from safetensors import safe_open
-from sentence_transformers import SentenceTransformer
+
+# from sentence_transformers import SentenceTransformer
 from sklearn.neighbors import NearestNeighbors
 
 

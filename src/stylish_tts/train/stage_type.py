@@ -285,12 +285,15 @@ def train_alignment(
     batch, model, train, probing, disc_index
 ) -> Tuple[LossLog, Optional[torch.Tensor]]:
     log = build_loss_log(train)
-    mel, mel_length = calculate_mel(
-        batch.audio_gt,
-        train.to_align_mel,
-        train.normalization.mel_log_mean,
-        train.normalization.mel_log_std,
-    )
+    with torch.no_grad():
+        mel, mel_length = calculate_mel(
+            batch.audio_gt,
+            train.to_align_mel,
+            train.normalization.mel_log_mean,
+            train.normalization.mel_log_std,
+        )
+        # mel, _ = train.kanade_codec.get_ssl_embeddings(batch.audio_gt)
+        # mel_length = torch.tensor([mel.shape[1]] * mel.shape[0], device=mel.device)
     mel = rearrange(mel, "b f t -> b t f")
     ctc, _ = model.text_aligner(mel, mel_length)
     train.stage.optimizer.zero_grad()
@@ -309,12 +312,15 @@ def train_alignment(
 @torch.no_grad()
 def validate_alignment(batch, train):
     log = build_loss_log(train)
-    mel, mel_length = calculate_mel(
-        batch.audio_gt,
-        train.to_align_mel,
-        train.normalization.mel_log_mean,
-        train.normalization.mel_log_std,
-    )
+    with torch.no_grad():
+        mel, mel_length = calculate_mel(
+            batch.audio_gt,
+            train.to_align_mel,
+            train.normalization.mel_log_mean,
+            train.normalization.mel_log_std,
+        )
+        # mel, _ = train.kanade_codec.get_ssl_embeddings(batch.audio_gt)
+        # mel_length = torch.tensor([mel.shape[1]] * mel.shape[0], device=mel.device)
     mel = rearrange(mel, "b f t -> b t f")
     ctc, _ = train.model.text_aligner(mel, mel_length)
     train.stage.optimizer.zero_grad()
@@ -353,6 +359,7 @@ stages["alignment"] = StageType(
         "text",
         "text_length",
         "audio_gt",
+        "focal_codes",
     ],
 )
 
@@ -663,23 +670,28 @@ from stylish_tts.train.multi_spectrogram import MultiSpectrogram
 
 def train_focal(batch, model, train, probing, disc_index):
     with torch.no_grad():
-        train.focal_codec.remove_encoder()
-        train.vevo_codec.remove_encoder()
-        speaker_emb = train.speaker_embedder(batch.audio_gt)
-        phones, *_ = train.hubert(batch.audio_gt, 1)
-        # speech_style = model.speech_style_encoder(speaker_emb)
-        acoustic, semantic = batch.focal_codes, phones.mT
-        noisy_acoustic, corrupt_mask, t = model.focal_code_predictor.make_noisy_sample(
-            acoustic
+        train.kanade_codec.remove_encoder()
+        alignment = train.duration_processor.duration_to_alignment(
+            batch.alignment[:, 0, :],
+            multiplier=0.5,
         )
-        prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
+        semantic_gt = batch.focal_codes
+        text = (batch.text.unsqueeze(2) * alignment).sum(1)
+        # prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
+        # style = torch.cat([prosody.mean(-1), prosody.std(-1)], 1)
+        # style = train.prosody_wavlm(batch.audio_gt)
+        ref = train.kanade_codec.get_global_embeddings(batch.audio_gt)
+        # ref = batch.speaker_id
+        noisy_text, noisy_ref, noisy_semantic, corrupt_mask, t = (
+            model.focal_code_predictor.make_noisy_sample(text, ref, semantic_gt)
+        )
 
-    logits = model.focal_code_predictor(noisy_acoustic, semantic, speaker_emb, t)
+    logits = model.focal_code_predictor(noisy_text, noisy_ref, noisy_semantic, t)
     train.stage.optimizer.zero_grad()
     log = build_loss_log(train)
     loss = F.cross_entropy(
         rearrange(logits, "b t c -> (b t) c"),
-        rearrange(acoustic, "b t -> (b t)"),
+        rearrange(semantic_gt, "b t -> (b t)"),
         reduction="none",
     )
     loss_mask = rearrange(corrupt_mask, "b t -> (b t)")
@@ -694,25 +706,40 @@ def train_focal(batch, model, train, probing, disc_index):
 def validate_focal(batch, train):
     model = train.model
     with torch.no_grad():
-        train.focal_codec.remove_encoder()
-        train.vevo_codec.remove_encoder()
-        speaker_emb = train.speaker_embedder(batch.audio_gt)
-        phones, *_ = train.hubert(batch.audio_gt, 1)
+        train.kanade_codec.remove_encoder()
+        # train.s3_codec.remove_encoder()
+        # speaker_emb = train.speaker_embedder(batch.audio_gt)
+        # phones, *_ = train.hubert(batch.audio_gt, 1)
         # speech_style = model.speech_style_encoder(speaker_emb)
-        multi_spectrogram = MultiSpectrogram(sample_rate=16_000)
-        prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
-        acoustic, semantic = batch.focal_codes, phones.mT
-        # if semantic.shape[-1] > 50*3:
-        #     prompt_semantic = semantic[:, 50*2:50*3, :]
-        #     prompt_acoustic = acoustic[:, 50*2:50*3]
+        # multi_spectrogram = MultiSpectrogram(sample_rate=16_000)
+        # prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
+        semantic_gt = batch.focal_codes
+        semantic = torch.full_like(
+            semantic_gt, model.focal_code_predictor.text_mask_token
+        )
+        alignment = train.duration_processor.duration_to_alignment(
+            batch.alignment[:, 0, :],
+            multiplier=0.5,
+        )
+        text = (batch.text.unsqueeze(2) * alignment).sum(1)
+        # prosody, *_ = train.emotion2vec(batch.audio_gt, 1)
+        # style = torch.cat([prosody.mean(-1), prosody.std(-1)], 1)
+        # style = train.prosody_wavlm(batch.audio_gt)
+        # if text.shape[-1] >= 25*3:
+        #     prompt_semantic = semantic_gt[:, :25*3]
         # else:
-        prompt_semantic = semantic
-        prompt_acoustic = acoustic
+        #     prompt_semantic = semantic_gt
+        ref = train.kanade_codec.get_global_embeddings(batch.audio_gt)
+        # ref = batch.speaker_id
 
-    pred_codes = model.focal_code_predictor.generate(
-        prompt_semantic, prompt_acoustic, semantic, speaker_emb
+    pred_semantic = model.focal_code_predictor.generate(
+        text=text,
+        ref=ref,
+        output=semantic,
+        T_prompt=None,
     )
-    pred_audio = train.focal_codec.decode(pred_codes)
+    global_embs = train.kanade_codec.get_global_embeddings(batch.audio_gt)
+    pred_audio = train.kanade_codec.decode(pred_semantic, global_embs)
     (
         target_spec,
         pred_spec,
@@ -720,15 +747,13 @@ def validate_focal(batch, train):
         pred_phase,
         target_fft,
         pred_fft,
-    ) = multi_spectrogram(
-        target=torchaudio.functional.resample(
-            batch.audio_gt, train.model_config.sample_rate, 16_000
-        ),
+    ) = train.multi_spectrogram(
+        target=batch.audio_gt,
         pred=pred_audio,
     )
-    pred_audio = torchaudio.functional.resample(
-        pred_audio, 16_000, train.model_config.sample_rate
-    )
+    # pred_audio = torchaudio.functional.resample(
+    #     pred_audio, 16_000, train.model_config.sample_rate
+    # )
     log = build_loss_log(train)
     train.stft_loss(target_list=target_spec, pred_list=pred_spec, log=log)
     return log.detach(), None, pred_audio, batch.audio_gt
@@ -747,7 +772,10 @@ stages["duration"] = StageType(
         "audio_gt",
         "pitch",
         "focal_codes",
-        "vevo_codes",
+        "s3_codes",
+        "speaker_id",
+        "text",
+        "alignment",
     ],
 )
 

@@ -31,7 +31,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         duration_processor,
     ):
         self.pitch = {}
-        if osp.isfile(alignment_path):
+        if osp.isfile(pitch_path):
             with safe_open(pitch_path, framework="pt", device="cpu") as f:
                 for key in f.keys():
                     self.pitch[key] = f.get_tensor(key)
@@ -55,11 +55,6 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.duration_weights = durations.sum() / (durations * durations.shape[0])
         self.data_list = []
         self.focal_codes = load_file(root_path / "focal_codes.safetensors")
-        vevo_codes_path = root_path / "vevo_codes.safetensors"
-        if vevo_codes_path.exists():
-            self.vevo_codes = load_file(vevo_codes_path)
-        else:
-            self.vevo_codes = None
         sentences = []
         for line in data_list:
             fields = line.strip().split("|")
@@ -153,11 +148,11 @@ class FilePathDataset(torch.utils.data.Dataset):
                 (3, text_tensor.shape[0]),
                 dtype=torch.float32,  # Match Collater's target dtype
             )
-        focal_codes = self.focal_codes[path].detach()
-        if self.vevo_codes is not None:
-            vevo_codes = self.vevo_codes[path].detach()
+        if path in self.focal_codes:
+            focal_codes = self.focal_codes[path].detach()
         else:
-            vevo_codes = focal_codes
+            focal_codes = 0
+        s3_codes = focal_codes
         return (
             speaker_id,
             text_tensor,
@@ -166,7 +161,7 @@ class FilePathDataset(torch.utils.data.Dataset):
             pitch,
             alignment,
             focal_codes,
-            vevo_codes,
+            s3_codes,
         )
 
     def _load_tensor(self, data):
@@ -192,9 +187,6 @@ class FilePathDataset(torch.utils.data.Dataset):
         wave = torch.from_numpy(wave).float()
 
         text = self.text_cleaner(text)
-
-        text.insert(0, 0)
-        text.append(0)
         text = torch.LongTensor(text)
 
         return (wave, text, speaker_id)
@@ -225,8 +217,8 @@ class Collater(object):
         waves = torch.zeros((batch_size, batch[0][3].shape[-1])).float()
         pitches = torch.zeros((batch_size, mel_length)).float()
         alignments = torch.zeros((batch_size, 1, max_text_length))
-        focal_codes = torch.zeros((batch_size, mel_length // 4)).long()
-        vevo_codes = torch.zeros((batch_size, mel_length // 4)).long()
+        focal_codes = torch.zeros((batch_size, mel_length // 4 // 2)).long()
+        s3_codes = torch.zeros((batch_size, mel_length // 4)).long()
         # alignments = torch.zeros((batch_size, max_text_length, mel_length))
         # alignments = torch.zeros((batch_size, max_text_length, mel_length // 2))
 
@@ -238,7 +230,7 @@ class Collater(object):
             pitch,
             duration,
             focal_code,
-            vevo_code,
+            s3_code,
         ) in enumerate(batch):
             speaker_out[bid] = speaker
 
@@ -272,7 +264,7 @@ class Collater(object):
             #     alignments[bid, :text_size, :mel_length] = alignment
             alignments[bid, :1, :text_size] = duration[:1]
             focal_codes[bid] = focal_code
-            vevo_codes[bid] = vevo_code
+            # s3_codes[bid] = s3_code[:, :s3_codes.shape[1]]
 
         result = (
             waves,
@@ -282,7 +274,7 @@ class Collater(object):
             pitches,
             alignments,
             focal_codes,
-            vevo_codes,
+            s3_codes,
             speaker_out,
         )
         return result

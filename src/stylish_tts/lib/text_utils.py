@@ -16,9 +16,13 @@ class TextCleaner:
             symbols.letters_ipa
         )  # "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
         self.word_index_dictionary = self.build_text_cleaner()
+        self.index_word_dictionary = {
+            v: k for k, v in self.word_index_dictionary.items()
+        }
         # logger.debug(len(dicts))
 
     def __call__(self, text):
+        text = self._pad + text + self._pad
         indexes = []
         for char in text:
             try:

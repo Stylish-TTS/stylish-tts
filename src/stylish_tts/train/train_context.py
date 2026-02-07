@@ -27,7 +27,7 @@ from stylish_tts.train.models.pretrained import (
     AdaptiveHubert,
     AdaptiveFocalCodec,
     AdaptiveEmotion2Vec,
-    AdaptiveVevoCodec,
+    AdaptiveKanadeCodec,
 )
 
 
@@ -138,7 +138,7 @@ class TrainContext:
             sample_rate=self.model_config.sample_rate
         ).to(self.config.training.device)
         self.align_loss: CTCLossWithLabelPriors = CTCLossWithLabelPriors(
-            prior_scaling_factor=0.3, blank=model_config.text_encoder.tokens
+            prior_scaling_factor=0.3, blank=0
         ).to(self.config.training.device)
         # self.magphase_loss: MagPhaseLoss = MagPhaseLoss(
         #     n_fft=self.model_config.generator.gen_istft_n_fft,
@@ -193,26 +193,36 @@ class TrainContext:
             .to(self.config.training.device)
             .eval()
         )
-        self.hubert = (
-            AdaptiveHubert("lengyue233/content-vec-best", self.model_config.sample_rate)
+        # self.hubert = (
+        #     AdaptiveHubert("lengyue233/content-vec-best", self.model_config.sample_rate)
+        #     .to(self.config.training.device)
+        #     .eval()
+        # )
+        # self.emotion2vec = (
+        #     AdaptiveEmotion2Vec(self.model_config.sample_rate)
+        #     .to(self.config.training.device)
+        #     .eval()
+        # )
+        # self.focal_codec = (
+        #     AdaptiveFocalCodec(self.model_config.sample_rate)
+        #     .to(self.config.training.device)
+        #     .eval()
+        # )
+        # self.s3_codec = (
+        #     AdaptiveS3Codec(self.model_config.sample_rate)
+        #     .to(self.config.training.device)
+        #     .eval()
+        # )
+        self.kanade_codec = (
+            AdaptiveKanadeCodec(self.model_config.sample_rate)
             .to(self.config.training.device)
             .eval()
         )
-        self.emotion2vec = (
-            AdaptiveEmotion2Vec(self.model_config.sample_rate)
-            .to(self.config.training.device)
-            .eval()
-        )
-        self.focal_codec = (
-            AdaptiveFocalCodec(self.model_config.sample_rate)
-            .to(self.config.training.device)
-            .eval()
-        )
-        self.vevo_codec = (
-            AdaptiveVevoCodec(self.model_config.sample_rate)
-            .to(self.config.training.device)
-            .eval()
-        )
+        # self.prosody_wavlm = (
+        #     AdaptiveOrangeWavLM(self.model_config.sample_rate)
+        #     .to(self.config.training.device)
+        #     .eval()
+        # )
 
     def reset_out_dir(self, stage_name):
         self.out_dir = osp.join(self.base_output_dir, stage_name)

@@ -14,7 +14,7 @@ from .mel_style_encoder import MelStyleEncoder, PitchStyleEncoder
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .speech_predictor import SpeechPredictor
 from .pitch_discriminator import PitchDiscriminator
-from .token_predictor import TokenPredictor
+from .token_predictor import MaskedTokenPredictor
 
 from munch import Munch
 
@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_model(model_config: ModelConfig):
-    text_aligner = tdnn_blstm_ctc_model_base(
-        model_config.text_aligner.n_mels, model_config.text_encoder.tokens
-    )
+    text_aligner = tdnn_blstm_ctc_model_base(80, model_config.text_encoder.tokens)
 
     duration_predictor = DurationPredictor(
         style_dim=model_config.style_dim,
@@ -96,9 +94,7 @@ def build_model(model_config: ModelConfig):
         duration_style_encoder=duration_style_encoder,
         pitch_disc=PitchDiscriminator(dim_in=2, dim_hidden=64, kernel=21),
         dur_disc=PitchDiscriminator(dim_in=1, dim_hidden=64, kernel=5),
-        focal_code_predictor=TokenPredictor(
-            model_config.inter_dim, model_config.style_dim
-        ),
+        focal_code_predictor=MaskedTokenPredictor(178, 12800),
     )
 
     return nets

@@ -13,8 +13,8 @@ import torchaudio.compliance.kaldi as kaldi
 import torch.nn.functional as F
 from .emotion2vec import Emotion2Vec
 from focalcodec import FocalCodec
-from .vevo_repcodec import VevoRepCodec
 from pathlib import Path
+from kanade_tokenizer import KanadeModel, load_vocoder, vocode
 
 
 class HubertModelWithFinalProj(HubertModel):
@@ -192,71 +192,104 @@ class AdaptiveEmotion2Vec(torch.nn.Module):
         return xs
 
 
-class AdaptiveVevoCodec(torch.nn.Module):
-    def __init__(self, global_sr: int):
+# class AdaptiveS3Codec(torch.nn.Module):
+#     def __init__(self, global_sr: int):
+#         super().__init__()
+#         self.codec = s3tokenizer.S3Tokenizer("speech_tokenizer_v1_25hz")
+#         self.codec.init_from_onnx("D:\\TTS\\speech_tokenizer_v1.onnx")
+#         self.resample = torchaudio.transforms.Resample(global_sr, 16000)
+
+#     def remove_encoder(self):
+#         if hasattr(self, "codec"):
+#             del self.codec
+#             torch.cuda.empty_cache()
+
+#     def forward(self, wave, *scales, center_pad=True):
+#         wave = self.resample(wave)
+#         x = s3tokenizer.log_mel_spectrogram(wave)
+#         codes = []
+#         for scale in scales:
+#             _x = F.interpolate(
+#                 x,
+#                 scale_factor=scale,
+#                 mode="nearest",
+#             )
+#             if center_pad:
+#                 # Padding due to center=True??
+#                 pad = scale
+#                 _x = F.pad(_x, (pad // 2, pad // 2 + (pad % 2)), "reflect")
+#             _codes, _ = self.codec(_x, torch.tensor([_x.shape[-1]], device=x.device, dtype=torch.long))
+#             codes.append(_codes)
+#         return codes
+
+
+class AdaptiveKanadeCodec(nn.Module):
+    def __init__(
+        self, global_sr: int, codec_path: str = "frothywater/kanade-25hz-clean"
+    ):
         super().__init__()
-        self.hubert = torchaudio.pipelines.HUBERT_LARGE.get_model()
-
-        down_dir = snapshot_download(
-            repo_id="amphion/Vevo",
-            repo_type="model",
-            allow_patterns=["tokenizer/vq32/*"],
-        )
-        down_dir = Path(down_dir, "tokenizer/vq32")
-        with open(down_dir / "hubert_large_l18_c32.yaml") as fp:
-            conf = yaml.load(fp, Loader=yaml.FullLoader)
-
-        self.vqvae = VevoRepCodec(**conf)
-        self.vqvae.quantizer.initial()
-        self.vqvae.load_state_dict(
-            torch.load(down_dir / "hubert_large_l18_c32.pkl", map_location="cpu")[
-                "model"
-            ]["repcodec"]
-        )
-        self.resample = torchaudio.transforms.Resample(global_sr, 16000)
+        self.model = KanadeModel.from_pretrained(codec_path)
+        self.vocoder = load_vocoder(self.model.config.vocoder_name)
 
     def remove_encoder(self):
-        if hasattr(self, "hubert"):
-            del self.hubert
-            del self.vqvae
-            torch.cuda.empty_cache()
+        pass
 
-    @torch.no_grad()
-    def extract_hubert_feature(self, wavs, wav_lens=None, output_layer=18):
-        """
-        Args:
-            wavs: [B, T]
-            wav_lens: [B,]
-        Returns:
-            feats: [B, T, D]
-            feat_lengths: [B]
-        """
-        if wav_lens is None:
-            wav_lens = torch.tensor([wavs.shape[1]] * wavs.shape[0]).to(wavs).int()
+    def normalize(self, wave):
+        max_val = torch.max(torch.abs(wave)) + 1e-8
+        wave = wave / max_val  # Normalize to [-1, 1]
+        return wave
 
-        feats, feat_lengths = self.hubert.extract_features(
-            wavs, lengths=wav_lens, num_layers=output_layer
-        )
-        feats = feats[-1]
-        return feats, feat_lengths
-
-    def forward(self, wave, *scales, center_pad=True):
-        wave = self.resample(wave)
-        feats, _ = self.extract_hubert_feature(wave)
-        x = self.vqvae.encoder(feats.mT)
-        x = self.vqvae.projector(x)
+    def forward(self, wave, *scales, center_pad=False):
+        x = [
+            self.model.encode(_wave, True, False).content_token_indices
+            for _wave in self.normalize(wave)
+        ]
+        x = torch.stack(x, 0)
         codes = []
         for scale in scales:
-            _x = F.interpolate(
-                x,
-                scale_factor=scale,
-                mode="nearest",
-            )
+            _x = x.repeat(1, scale)
             if center_pad:
                 # Padding due to center=True??
                 pad = scale
                 _x = F.pad(_x, (pad // 2, pad // 2 + (pad % 2)), "reflect")
-
-            _, idx = self.vqvae.quantizer.codebook.forward_index(_x.mT)
-            codes.append(idx[0])
+            codes.append(_x)
         return codes
+
+    def get_ssl_embeddings(self, waveform: torch.Tensor):
+        waveform = self.normalize(waveform)
+        audio_length = waveform.size(-1)
+        padding = self.model._calculate_waveform_padding(audio_length)
+        local_ssl_features, global_ssl_features = self.model.forward_ssl_features(
+            waveform, padding=padding
+        )
+        return local_ssl_features, global_ssl_features
+
+    def get_global_embeddings(self, wave):
+        x = [
+            self.model.encode(_wave, False, True).global_embedding
+            for _wave in self.normalize(wave)
+        ]
+        x = torch.stack(x, 0)
+        return x
+
+    def decode(self, content_tokens, global_embs):
+        mel = []
+        for content_token, global_emb in zip(content_tokens, global_embs):
+            _mel = self.model.decode(
+                content_token_indices=content_token,
+                global_embedding=global_emb,
+            )
+            mel.append(_mel)
+        return vocode(self.vocoder, torch.stack(mel, 0))
+
+
+# class AdaptiveOrangeWavLM(nn.Module):
+#     def __init__(self, global_sr: int, model_path="Orange/Speaker-wavLM-pro"):
+#         super().__init__()
+#         self.model = EmbeddingsModel.from_pretrained(model_path)
+#         self.resample = torchaudio.transforms.Resample(global_sr, 16000)
+
+#     def forward(self, wave):
+#         wave = self.resample(wave)
+#         x = self.model(wave)
+#         return x
