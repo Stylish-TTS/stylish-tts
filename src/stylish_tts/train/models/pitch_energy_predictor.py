@@ -66,7 +66,7 @@ class AdainResBlk1d(nn.Module):
     def _residual(self, x, s):
         x = self.norm1(x, s)
         x = self.actv(x)
-        x = self.pool(x)
+        # x = self.pool(x)
         x = self.conv1(self.dropout(x))
         x = self.norm2(x, s)
         x = self.actv(x)
@@ -85,10 +85,10 @@ class UpSample1d(nn.Module):
         self.layer_type = layer_type
 
     def forward(self, x):
-        if self.layer_type == "none":
-            return x
-        else:
-            return F.interpolate(x, scale_factor=2, mode="nearest")
+        # if self.layer_type == "none":
+        return x
+        # else:
+        # return F.interpolate(x, scale_factor=2, mode="nearest")
 
 
 class AdaIN1d(nn.Module):

@@ -140,9 +140,9 @@ class TrainContext:
         # ).to(self.config.training.device)
         # TODO: Remove hardcoded valude
         self.magphase_loss: MagPhaseLoss = MagPhaseLoss(
-            n_fft=self.model_config.n_fft // 2,
+            n_fft=self.model_config.n_fft,  # // 2,
             hop_length=self.model_config.hop_length // 3,
-            win_length=self.model_config.win_length // 2,
+            win_length=self.model_config.win_length,  # // 2,
         ).to(self.config.training.device)
         self.duration_loss: DurationLoss = None
 

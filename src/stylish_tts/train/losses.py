@@ -6,7 +6,8 @@ import torch.nn.functional as F
 import torchaudio
 from transformers import AutoModel
 import numpy as np
-import k2
+
+# import k2
 from einops import rearrange
 from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
 from stylish_tts.train.models.discriminator import run_discriminator_model
@@ -494,7 +495,7 @@ class CTCLossWithLabelPriors(nn.Module):
 
     def to(self, device):
         super().to(device)
-        self.k2_device = device if k2.with_cuda else "cpu"
+        # self.k2_device = device if k2.with_cuda else "cpu"
         return self
 
     def encode_supervisions(

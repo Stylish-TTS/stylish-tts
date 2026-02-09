@@ -225,7 +225,8 @@ class AcousticStep:
         )
 
     def magphase_loss(self):
-        self.train.magphase_loss(self.pred, self.batch.audio_gt, self.log)
+        # self.train.magphase_loss(self.pred, self.batch.audio_gt, self.log)
+        pass
 
     def pitch_loss(self):
         # target = torch.complex(self.pitch * self.voiced, self.energy*4)
