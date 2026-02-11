@@ -5,9 +5,7 @@ from .prosody_encoder import ProsodyEncoder
 from .duration_predictor import DurationPredictor
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .decoder import Decoder
-from .generator import UpsampleGenerator, Generator
-from .conv_next import BasicConvNeXtBlock
-from vector_quantize_pytorch import FSQ
+from .generator import UpsampleGenerator, Generator, MultiGenerator
 
 
 class SpeechPredictor(torch.nn.Module):
@@ -48,7 +46,7 @@ class SpeechPredictor(torch.nn.Module):
         #     gen_istft_hop_size=model_config.generator.gen_istft_hop_size,
         #     sample_rate=model_config.sample_rate,
         # )
-        self.generator = Generator(
+        self.generator = MultiGenerator(
             style_dim=model_config.style_dim,
             n_fft=model_config.n_fft,
             win_length=model_config.win_length,

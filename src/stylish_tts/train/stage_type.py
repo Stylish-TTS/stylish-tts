@@ -212,6 +212,8 @@ class AcousticStep:
             self.train.generator_loss(
                 target_list=[self.pitchcat],
                 pred_list=[self.pred_pitchcat],
+                target_audio=None,
+                pred_audio=None,
                 used=["pitch_disc"],
                 index=0,
             ).mean(),
@@ -223,6 +225,8 @@ class AcousticStep:
             self.train.generator_loss(
                 target_list=self.target_fft,
                 pred_list=self.pred_fft,
+                target_audio=self.batch.audio_gt,
+                pred_audio=self.pred.audio.squeeze(1),
                 used=["mrd"],
                 index=disc_index,
             ).mean(),
@@ -235,7 +239,8 @@ class AcousticStep:
         )
 
     def magphase_loss(self):
-        self.train.magphase_loss(self.pred, self.batch.audio_gt, self.log)
+        # self.train.magphase_loss(self.pred, self.batch.audio_gt, self.log)
+        pass
 
     def pitch_loss(self):
         # target = torch.complex(self.pitch * self.voiced, self.energy*4)
@@ -388,7 +393,13 @@ def train_acoustic(
     step.distil_loss()
 
     train.accelerator.backward(log.backwards_loss())
-    return log.detach(), detach_all(step.target_fft), detach_all(step.pred_fft)
+    return (
+        log.detach(),
+        detach_all(step.target_fft),
+        detach_all(step.pred_fft),
+        detach_all([step.batch.audio_gt]),
+        detach_all([step.pred.audio.squeeze(1)]),
+    )
 
 
 @torch.no_grad()
@@ -417,7 +428,7 @@ stages["acoustic"] = StageType(
         "speech_style_encoder",
     ],
     eval_models=[],
-    discriminators=["mrd0", "mrd1", "mrd2"],
+    discriminators=["mrd0", "mrd1", "mrd2", "disc"],
     inputs=[
         "text",
         "text_length",
@@ -452,6 +463,8 @@ def train_textual(
     train.accelerator.backward(log.backwards_loss())
     return (
         log.detach(),
+        None,
+        None,
         None,
         None,
     )  # detach_all([step.pitchcat]), detach_all([step.pred_pitchcat])
@@ -545,6 +558,8 @@ def train_duration(
         train.generator_loss(
             target_list=[target_disc],
             pred_list=[pred_disc],
+            target_audio=None,
+            pred_audio=None,
             used=["dur_disc"],
             index=0,
         ).mean(),
@@ -554,7 +569,13 @@ def train_duration(
     log.add_loss("duration", duration_loss)
     train.accelerator.backward(log.backwards_loss())
 
-    return log.detach(), detach_all([target_disc]), detach_all([pred_disc])
+    return (
+        log.detach(),
+        detach_all([target_disc]),
+        detach_all([pred_disc]),
+        [None],
+        [None],
+    )
 
 
 @torch.no_grad()

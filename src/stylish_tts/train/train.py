@@ -206,6 +206,7 @@ def train_model(
         mrd0=train.model.mrd0,
         mrd1=train.model.mrd1,
         mrd2=train.model.mrd2,
+        disc=train.model.disc,
         pitch=train.model.pitch_disc,
         duration=train.model.dur_disc,
     ).to(train.config.training.device)
@@ -213,6 +214,7 @@ def train_model(
         mrd0=train.model.mrd0,
         mrd1=train.model.mrd1,
         mrd2=train.model.mrd2,
+        disc=train.model.disc,
         pitch=train.model.pitch_disc,
         duration=train.model.dur_disc,
     ).to(train.config.training.device)

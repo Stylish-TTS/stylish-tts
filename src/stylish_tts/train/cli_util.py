@@ -54,6 +54,7 @@ class Checkpoint:
             self.model[key].to(config.training.device)
 
         self.disc_loss = DiscriminatorLoss(
+            disc=self.model.disc,
             mrd0=self.model.mrd0,
             mrd1=self.model.mrd1,
             mrd2=self.model.mrd2,
