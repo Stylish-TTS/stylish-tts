@@ -25,12 +25,12 @@ training_plan:
     lr: 1e-5
   acoustic:
     # training of acoustic models and vocoder
-    epochs: 10
+    epochs: 20
     probe_batch_max: 16
     lr: 1e-4
   textual:
     # training for duration/pitch/energy from text
-    epochs: 10
+    epochs: 40
     probe_batch_max: 32
     lr: 3e-5
   style:
@@ -44,7 +44,7 @@ training_plan:
     probe_batch_max: 16
     lr: 1e-5
   duration:
-    epochs: 15
+    epochs: 80
     probe_batch_max: 32
     lr: 1e-4
 
@@ -75,7 +75,7 @@ loss_weight:
   mel: 5
   # generator loss
   # -- if voice sounds autotuned, try increasing
-  generator: 8
+  generator: 1
   # speech-language model feature matching loss
   slm: 0.2
   # pitch F0 reconstruction loss
