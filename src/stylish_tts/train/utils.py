@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from munch import Munch
 import os
 import subprocess
@@ -246,50 +247,120 @@ def plot_spectrogram_to_figure(
     return fig  # Return the figure object directly
 
 
-def plot_mel_signed_difference_to_figure(
-    mel_gt_normalized_np,  # Ground truth (already normalized log mel)
-    mel_pred_log_np,  # Predicted (raw log mel)
-    mean: float,  # Dataset mean used for normalization
-    std: float,  # Dataset std used for normalization
-    title="Signed Mel Log Difference (GT - Pred)",  # Updated title
-    figsize=(12, 5),
-    dpi=150,
-    cmap="vanimo",
-    max_abs_diff_clip=None,  # Optional: Clip the color range e.g., 3.0
-    static_max_abs=None,  # Optional: Static max abs value for consistent color range
-):
-    """Plots the signed difference between two mel spectrograms using a diverging colormap."""
-    plt.switch_backend("agg")
-
-    # Ensure shapes match by trimming to the minimum length
-    min_len = min(mel_gt_normalized_np.shape[1], mel_pred_log_np.shape[1])
-    mel_gt_trimmed = mel_gt_normalized_np[:, :min_len]
-    mel_pred_log_trimmed = mel_pred_log_np[:, :min_len]
-
-    # Normalize the predicted log mel
-    mel_pred_normalized_np = (mel_pred_log_trimmed - mean) / std
-
-    # Calculate SIGNED difference in the *normalized* log domain
-    diff = mel_gt_trimmed - mel_pred_normalized_np
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+def robust_color_limits(
+    diff: np.ndarray,
+    static_max_abs: float | None = None,
+    max_abs_diff_clip: float | None = None,
+    mad_multiplier: float = 3.0,
+) -> tuple[float, float, float]:
+    """Compute symmetric color limits around zero using robust statistics."""
 
     if static_max_abs is not None:
-        # Use static max abs value for color limits
-        vmin = -static_max_abs
-        vmax = static_max_abs
+        max_abs = abs(static_max_abs)
     else:
-        # Determine symmetric color limits centered at 0
-        max_abs_val = np.max(np.abs(diff)) + 1e-9  # Add epsilon for stability
-        if max_abs_diff_clip is not None:
-            max_abs_val = min(
-                max_abs_val, max_abs_diff_clip
-            )  # Apply clipping if specified
+        median = float(np.median(diff))
+        mad = float(np.median(np.abs(diff - median)))
+        if mad > 1e-9:
+            robust_bound = abs(median) + mad_multiplier * mad
+        else:
+            robust_bound = float(np.max(np.abs(diff)))
 
-        vmin = -max_abs_val
-        vmax = max_abs_val
+        max_abs = robust_bound if robust_bound > 1e-6 else 1.0
 
-    im = ax.imshow(
+    if max_abs_diff_clip is not None:
+        max_abs = min(max_abs, abs(max_abs_diff_clip))
+
+    return -max_abs, max_abs, max_abs
+
+
+def summarize_residual(diff: np.ndarray) -> dict[str, float]:
+    """Return scalar diagnostics for a residual heatmap."""
+
+    abs_diff = np.abs(diff)
+    mean_abs = float(np.mean(abs_diff))
+    p95 = float(np.percentile(abs_diff, 95)) if abs_diff.size > 0 else 0.0
+    rms = float(np.sqrt(np.mean(diff**2))) if abs_diff.size else 0.0
+    return {
+        "mean_abs": mean_abs,
+        "p95_abs": p95,
+        "rms": rms,
+    }
+
+
+def collapse_residual(
+    diff: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Aggregate residuals for summary plots."""
+
+    if diff.size == 0:
+        empty = np.array([])
+        return empty, empty, empty, empty, empty, empty
+
+    abs_diff = np.abs(diff)
+    per_mel_abs = abs_diff.mean(axis=1)
+    per_frame_abs = abs_diff.mean(axis=0)
+    per_frame_pos = np.mean(np.clip(diff, 0.0, None), axis=0)
+    per_frame_neg = np.mean(np.clip(diff, None, 0.0), axis=0)
+    per_mel_pos = np.mean(np.clip(diff, 0.0, None), axis=1)
+    per_mel_neg = np.mean(np.clip(diff, None, 0.0), axis=1)
+    return (
+        per_mel_abs,
+        per_frame_abs,
+        per_frame_pos,
+        per_frame_neg,
+        per_mel_pos,
+        per_mel_neg,
+    )
+
+
+def plot_mel_signed_difference_to_figure(
+    mel_gt_normalized_np: np.ndarray,
+    mel_pred_normalized_np: np.ndarray,
+    *,
+    title: str = "Signed Mel Log Diff (GT - Pred)",
+    figsize: tuple[int, int] = (12, 7),
+    dpi: int = 150,
+    cmap: str = "seismic",
+    max_abs_diff_clip: float | None = None,
+    static_max_abs: float | None = None,
+    include_aggregates: bool = True,
+    contour_zero: bool = True,
+    confidence_mask: np.ndarray | None = None,
+) -> tuple[plt.Figure, dict[str, float]]:
+    """Plot residual heatmap with optional summaries and overlays."""
+
+    plt.switch_backend("agg")
+
+    min_len = min(mel_gt_normalized_np.shape[1], mel_pred_normalized_np.shape[1])
+    mel_gt_trimmed = mel_gt_normalized_np[:, :min_len]
+    mel_pred_trimmed = mel_pred_normalized_np[:, :min_len]
+    diff = mel_pred_trimmed - mel_gt_trimmed
+
+    vmin, vmax, vmax_used = robust_color_limits(
+        diff, static_max_abs=static_max_abs, max_abs_diff_clip=max_abs_diff_clip
+    )
+
+    if include_aggregates:
+        fig = plt.figure(figsize=figsize, dpi=dpi)
+        gs = gridspec.GridSpec(
+            2,
+            3,
+            height_ratios=[3, 1],
+            width_ratios=[1, 4, 0.6],
+            hspace=0.25,
+            wspace=0.3,
+        )
+        ax_main = fig.add_subplot(gs[0, 1])
+        ax_freq = fig.add_subplot(gs[0, 0], sharey=ax_main)
+        cax = fig.add_subplot(gs[0, 2])
+        ax_time = fig.add_subplot(gs[1, 1], sharex=ax_main)
+        ax_freq_stats = fig.add_subplot(gs[1, 0])
+        ax_frame_stats = fig.add_subplot(gs[1, 2])
+    else:
+        fig, ax_main = plt.subplots(figsize=figsize, dpi=dpi)
+        ax_time = ax_freq = cax = ax_freq_stats = ax_frame_stats = None
+
+    im = ax_main.imshow(
         diff,
         aspect="auto",
         origin="lower",
@@ -297,16 +368,205 @@ def plot_mel_signed_difference_to_figure(
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
-    )  # Use 'none' for raw diff
+    )
 
-    plt.colorbar(
-        im, ax=ax, label="Signed Normalized Log Difference (GT - Pred)"
-    )  # Updated label
-    plt.xlabel("Frames")
-    plt.ylabel("Mel Channels")
-    plt.title(title)
-    plt.tight_layout()
-    # plt.close(fig) # Don't close if returning fig
+    if contour_zero:
+        try:
+            ax_main.contour(
+                diff,
+                levels=[0.0],
+                colors="k",
+                linewidths=0.4,
+                alpha=0.4,
+            )
+        except Exception:
+            pass
+
+    if confidence_mask is not None:
+        try:
+            mask = confidence_mask[:, :min_len]
+            if mask.ndim == 2:
+                overlay = 1.0 - np.clip(mask, 0.0, 1.0)
+            else:
+                overlay = np.broadcast_to(
+                    1.0 - np.clip(mask, 0.0, 1.0), diff.shape
+                )
+            ax_main.imshow(
+                overlay,
+                aspect="auto",
+                origin="lower",
+                cmap="gray",
+                alpha=0.25,
+                vmin=0,
+                vmax=1,
+            )
+        except Exception:
+            pass
+
+    ax_main.set_xlabel("Frames")
+    ax_main.set_ylabel("Mel Channels")
+    if include_aggregates:
+        ax_main.set_ylabel("")
+        ax_main.tick_params(labelleft=False)
+    ax_main.set_title(f"{title} | vmax={vmax_used:.2f}")
+    if cax is not None:
+        fig.colorbar(im, cax=cax, label="Signed normalized log diff")
+    else:
+        fig.colorbar(
+            im,
+            ax=ax_main,
+            fraction=0.032,
+            pad=0.02,
+            label="Signed normalized log diff",
+        )
+
+    (
+        per_mel_abs,
+        per_frame_abs,
+        per_frame_pos,
+        per_frame_neg,
+        per_mel_pos,
+        per_mel_neg,
+    ) = collapse_residual(diff)
+    if include_aggregates:
+        frame_axis = np.arange(per_frame_abs.shape[0]) if per_frame_abs.size else np.array([])
+        if frame_axis.size:
+            ax_time.plot(frame_axis, per_frame_pos, color="#d62728")
+            ax_time.plot(frame_axis, per_frame_neg, color="#1f77b4")
+            ax_time.fill_between(frame_axis, 0, per_frame_pos, color="#d62728", alpha=0.15)
+            ax_time.fill_between(frame_axis, 0, per_frame_neg, color="#1f77b4", alpha=0.15)
+        ax_time.axhline(0, color="black", linewidth=0.6, alpha=0.6)
+        ax_time.set_ylim(-0.25, 0.25)
+        ax_time.set_title("Mean diff per frame")
+        ax_time.set_xlabel("Frame")
+        ax_time.set_ylabel("Mean diff")
+        if frame_axis.size:
+            ax_time.legend(loc="upper right", fontsize="small")
+
+        if per_mel_abs.size:
+            mel_axis = np.arange(per_mel_abs.shape[0])
+            ax_freq.plot(per_mel_pos, mel_axis, color="#d62728")
+            ax_freq.plot(per_mel_neg, mel_axis, color="#1f77b4")
+            ax_freq.fill_betweenx(mel_axis, 0, per_mel_pos, color="#d62728", alpha=0.15)
+            ax_freq.fill_betweenx(mel_axis, 0, per_mel_neg, color="#1f77b4", alpha=0.15)
+        ax_freq.axvline(0, color="black", linewidth=0.6, alpha=0.6)
+        ax_freq.set_xlim(-0.25, 0.25)
+        ax_freq.set_title("Mean diff per mel")
+        ax_freq.set_ylabel("Mel bin")
+        ax_freq.set_xlabel("Mean diff")
+        if per_mel_abs.size:
+            ax_freq.legend(loc="lower right", fontsize="small")
+
+        if ax_freq_stats is not None:
+            ax_freq_stats.axis("off")
+            mel_pos_avg = float(per_mel_pos.mean()) if per_mel_pos.size else 0.0
+            mel_neg_avg = float(per_mel_neg.mean()) if per_mel_neg.size else 0.0
+            ax_freq_stats.text(
+                0.03,
+                0.65,
+                f"avg: {mel_pos_avg:+.3f}",
+                fontsize=10,
+                color="#d62728",
+                transform=ax_freq_stats.transAxes,
+                ha="left",
+            )
+            ax_freq_stats.text(
+                0.03,
+                0.25,
+                f"avg: {mel_neg_avg:+.3f}",
+                fontsize=10,
+                color="#1f77b4",
+                transform=ax_freq_stats.transAxes,
+                ha="left",
+            )
+
+        if ax_frame_stats is not None:
+            ax_frame_stats.axis("off")
+            frame_pos_avg = float(per_frame_pos.mean()) if per_frame_pos.size else 0.0
+            frame_neg_avg = float(per_frame_neg.mean()) if per_frame_neg.size else 0.0
+            ax_frame_stats.text(
+                0.03,
+                0.65,
+                f"avg: {frame_pos_avg:+.3f}",
+                fontsize=10,
+                color="#d62728",
+                transform=ax_frame_stats.transAxes,
+                ha="left",
+            )
+            ax_frame_stats.text(
+                0.03,
+                0.25,
+                f"avg: {frame_neg_avg:+.3f}",
+                fontsize=10,
+                color="#1f77b4",
+                transform=ax_frame_stats.transAxes,
+                ha="left",
+            )
+
+    stats = summarize_residual(diff)
+    stats["vmax"] = float(vmax_used)
+    fig.tight_layout()
+    return fig, stats
+
+
+def plot_residual_temporal_grid(
+    diff: np.ndarray,
+    *,
+    frames_per_window: int = 128,
+    max_windows: int = 4,
+    cmap: str = "coolwarm",
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> plt.Figure:
+    """Create tiled snapshots of the residual over time windows."""
+
+    plt.switch_backend("agg")
+    total_frames = diff.shape[1]
+    if total_frames <= frames_per_window:
+        fig, ax = plt.subplots(figsize=(8, 3), dpi=150)
+        ax.imshow(
+            diff,
+            aspect="auto",
+            origin="lower",
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax.set_xlabel("Frames")
+        ax.set_ylabel("Mel Channels")
+        ax.set_title("Residual snapshot")
+        fig.tight_layout()
+        return fig
+
+    window_stride = max(total_frames // (max_windows + 1), frames_per_window)
+    windows = []
+    start = 0
+    while start < total_frames and len(windows) < max_windows:
+        end = min(start + frames_per_window, total_frames)
+        windows.append(diff[:, start:end])
+        start += window_stride
+
+    cols = len(windows)
+    fig, axes = plt.subplots(
+        1, cols, figsize=(4 * cols, 3), dpi=150, constrained_layout=True
+    )
+    if cols == 1:
+        axes = [axes]
+
+    for idx, (ax, window) in enumerate(zip(axes, windows)):
+        im = ax.imshow(
+            window,
+            aspect="auto",
+            origin="lower",
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax.set_title(f"Frames {idx * window_stride}-{idx * window_stride + window.shape[1]}")
+        ax.set_xlabel("Frames")
+        if idx == 0:
+            ax.set_ylabel("Mel Channels")
+    fig.colorbar(im, ax=axes, fraction=0.025, pad=0.03)
     return fig
 
 

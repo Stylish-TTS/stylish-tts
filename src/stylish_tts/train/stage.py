@@ -5,6 +5,7 @@ import os
 import os.path as osp
 import traceback
 from typing import List, Any, Dict, Optional
+import numpy as np
 import torch
 from munch import Munch
 import tqdm
@@ -203,9 +204,21 @@ class Stage:
                     #         f"eval/attention_{index}", get_image(attention), steps
                     #     )
                     for inputs_index, samples_index in samples:
-                        mel_gt_np = None
+                        mel_gt_log_np = None
+                        mel_gt_normalized_np = None
                         mel_pred_log_np = None
-                        fig_mel_diff = None
+                        mel_pred_normalized_np = None
+                        confidence_mask = None
+                        fig_mel_signed_diff = None
+                        fig_temporal = None
+                        dataset_mean = 0.0
+                        dataset_std = 1.0
+                        if (
+                            hasattr(train, "normalization")
+                            and train.normalization is not None
+                        ):
+                            dataset_mean = train.normalization.mel_log_mean
+                            dataset_std = train.normalization.mel_log_std
                         if (
                             audio_out is not None
                             and audio_out[inputs_index] is not None
@@ -228,6 +241,12 @@ class Stage:
                                     torch.clamp(mel_pred_tensor, min=1e-5)
                                 )
                                 mel_pred_log_np = mel_pred_log.cpu().numpy()
+                                if abs(dataset_std) > 1e-9:
+                                    mel_pred_normalized_np = (
+                                        mel_pred_log_np - dataset_mean
+                                    ) / dataset_std
+                                else:
+                                    mel_pred_normalized_np = mel_pred_log_np - dataset_mean
                                 fig_mel_pred = plot_spectrogram_to_figure(
                                     mel_pred_log_np,
                                     title=f"Predicted Mel (Step {steps})",
@@ -251,13 +270,17 @@ class Stage:
                             )
                             if self.name != "duration":
                                 try:
-                                    mel_gt_np = (
-                                        train.to_mel(audio_gt[inputs_index])
-                                        .cpu()
-                                        .numpy()
+                                    audio_gt_tensor = audio_gt[inputs_index]
+                                    if audio_gt_tensor.dim() > 1:
+                                        audio_gt_tensor = audio_gt_tensor.squeeze(0)
+                                    audio_gt_tensor = audio_gt_tensor.float()
+                                    mel_gt_tensor = train.to_mel(audio_gt_tensor).cpu()
+                                    mel_gt_log = torch.log(
+                                        torch.clamp(mel_gt_tensor, min=1e-5)
                                     )
+                                    mel_gt_log_np = mel_gt_log.numpy()
                                     fig_mel_gt = plot_spectrogram_to_figure(
-                                        mel_gt_np, title="GT Mel"
+                                        mel_gt_log_np, title="GT Mel (log)"
                                     )
                                     train.writer.add_figure(
                                         f"eval/sample_{samples_index}/mel_gt",
@@ -265,41 +288,117 @@ class Stage:
                                         global_step=0,
                                     )
                                     plt.close(fig_mel_gt)
+                                    if abs(dataset_std) > 1e-9:
+                                        mel_gt_normalized_np = (
+                                            mel_gt_log_np - dataset_mean
+                                        ) / dataset_std
+                                    else:
+                                        mel_gt_normalized_np = mel_gt_log_np - dataset_mean
+                                    frame_energy = mel_gt_tensor.sum(dim=0).numpy()
+                                    if frame_energy.size > 0:
+                                        max_energy = float(np.max(frame_energy))
+                                        if max_energy > 0:
+                                            energy_norm = frame_energy / max_energy
+                                        else:
+                                            energy_norm = frame_energy
+                                        confidence_mask = np.clip(energy_norm, 0.0, 1.0)
+                                        confidence_mask = np.tile(
+                                            confidence_mask[np.newaxis, :],
+                                            (mel_gt_tensor.shape[0], 1),
+                                        )
                                 except Exception as e:
                                     train.logger.warning(
                                         f"Could not plot GT mel for sample index {samples_index}: {e}"
                                     )
                         # --- NEW: Plot Mel Difference ---
-                        if mel_gt_np is not None and mel_pred_log_np is not None:
+                        if (
+                            mel_gt_normalized_np is not None
+                            and mel_pred_normalized_np is not None
+                        ):
                             if self.name != "duration":
                                 try:
-                                    # Use computed dataset normalization stats
-                                    dataset_mean = train.normalization.mel_log_mean
-                                    dataset_std = train.normalization.mel_log_std
+                                    voiced_mask = None
+                                    if (
+                                        hasattr(batch, "pitch")
+                                        and batch.pitch is not None
+                                    ):
+                                        try:
+                                            pitch_tensor = (
+                                                batch.pitch[inputs_index]
+                                                .detach()
+                                                .cpu()
+                                                .numpy()
+                                            )
+                                            if pitch_tensor.ndim == 1:
+                                                pitch_mask = (pitch_tensor > 10).astype(
+                                                    np.float32
+                                                )
+                                                pitch_mask = pitch_mask[np.newaxis, :]
+                                            else:
+                                                pitch_mask = (pitch_tensor > 10).astype(
+                                                    np.float32
+                                                )
+                                            voiced_mask = np.tile(
+                                                pitch_mask[:1],
+                                                (mel_gt_normalized_np.shape[0], 1),
+                                            )
+                                        except Exception:
+                                            voiced_mask = None
 
-                                    fig_mel_signed_diff = plot_mel_signed_difference_to_figure(
-                                        mel_gt_np,  # Already normalized log mel
-                                        mel_pred_log_np,  # Raw log mel
-                                        dataset_mean,  # Pass normalization mean
-                                        dataset_std,  # Pass normalization std
+                                    combined_confidence = confidence_mask
+                                    if voiced_mask is not None:
+                                        if combined_confidence is not None:
+                                            min_len_mask = min(
+                                                combined_confidence.shape[1],
+                                                voiced_mask.shape[1],
+                                            )
+                                            combined_confidence = combined_confidence[
+                                                :, :min_len_mask
+                                            ].copy()
+                                            voiced_trim = voiced_mask[:, :min_len_mask]
+                                            combined_confidence = np.minimum(
+                                                combined_confidence, voiced_trim
+                                            )
+                                        else:
+                                            combined_confidence = voiced_mask
+
+                                    min_len_for_plot = min(
+                                        mel_gt_normalized_np.shape[1],
+                                        mel_pred_normalized_np.shape[1],
+                                    )
+                                    if (
+                                        combined_confidence is not None
+                                        and combined_confidence.shape[1]
+                                        > min_len_for_plot
+                                    ):
+                                        combined_confidence = combined_confidence[
+                                            :, :min_len_for_plot
+                                        ]
+
+                                    fig_mel_signed_diff, diff_stats = plot_mel_signed_difference_to_figure(
+                                        mel_gt_normalized_np,
+                                        mel_pred_normalized_np,
                                         title=f"Signed Mel Log Diff (GT - Pred) (Step {steps})",
                                         static_max_abs=2.5,
-                                        # Optionally add clipping: max_abs_diff_clip=3.0
+                                        confidence_mask=combined_confidence,
                                     )
                                     train.writer.add_figure(
                                         f"eval/sample_{samples_index}/mel_difference_normalized",
                                         fig_mel_signed_diff,
                                         global_step=steps,
                                     )
-                                    plt.close(fig_mel_diff)  # Explicitly close figure
+                                    plt.close(fig_mel_signed_diff)  # Explicitly close figure
                                 except Exception as e:
                                     train.logger.warning(
                                         f"Could not plot mel difference for sample index {samples_index}: {e}"
                                     )
-                                    if fig_mel_diff is not None and plt.fignum_exists(
-                                        fig_mel_diff.number
+                                    if (
+                                        fig_mel_signed_diff is not None
+                                        and plt.fignum_exists(
+                                            fig_mel_signed_diff.number
+                                        )
                                     ):
-                                        plt.close(fig_mel_diff)
+                                        plt.close(fig_mel_signed_diff)
                 if train.accelerator.is_main_process:
                     interim = combine_logs(logs)
                     if progress_bar is not None and interim is not None:
