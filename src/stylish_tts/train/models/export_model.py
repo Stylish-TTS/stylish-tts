@@ -1,6 +1,6 @@
 import torch
 from einops import rearrange
-from stylish_tts.train.utils import DurationProcessor
+from stylish_tts.train.utils import DurationProcessor, denormalize_log2
 
 
 class ExportModel(torch.nn.Module):
@@ -8,13 +8,14 @@ class ExportModel(torch.nn.Module):
         self,
         *,
         speech_predictor,
-        duration_predictor,
         pitch_energy_predictor,
-        pe_text_encoder,
-        pe_text_style_encoder,
+        duration_predictor,
         device,
         class_count,
         max_dur,
+        pitch_log2_mean,
+        pitch_log2_std,
+        coarse_multiplier,
         **kwargs,
     ):
         super(ExportModel, self).__init__()
@@ -23,8 +24,6 @@ class ExportModel(torch.nn.Module):
             speech_predictor,
             duration_predictor,
             pitch_energy_predictor,
-            pe_text_encoder,
-            pe_text_style_encoder,
         ]:
             model.to(device).eval()
             for p in model.parameters():
@@ -34,19 +33,31 @@ class ExportModel(torch.nn.Module):
         self.duration_processor = DurationProcessor(class_count, max_dur).to(device)
         self.speech_predictor = speech_predictor
         self.pitch_energy_predictor = pitch_energy_predictor
-        self.pe_text_encoder = pe_text_encoder
-        self.pe_text_style_encoder = pe_text_style_encoder
+        self.pitch_log2_mean = pitch_log2_mean
+        self.pitch_log2_std = pitch_log2_std
+        self.coarse_multiplier = coarse_multiplier
 
-    def forward(self, texts, text_lengths):  # , alignment):
-        dur_pred = self.duration_predictor(texts, text_lengths)
+    def forward(self, texts, text_lengths, speech_style, pe_style, duration_style):
+        dur_pred = self.duration_predictor(texts, text_lengths, duration_style)
         alignment = self.duration_processor(dur_pred, text_lengths)
-        pe_text_encoding, _, _ = self.pe_text_encoder(texts, text_lengths)
-        pe_text_style = self.pe_text_style_encoder(pe_text_encoding, text_lengths)
-        pitch, energy, voiced = self.pitch_energy_predictor(
-            pe_text_encoding, text_lengths, alignment, pe_text_style
+        alignment_fine = self.duration_processor(
+            dur_pred, text_lengths, multiplier=self.coarse_multiplier
         )
+        torch._check(alignment.shape[2] < 10000)
+        pitch, energy = self.pitch_energy_predictor(
+            texts, text_lengths, alignment, pe_style
+        )
+        voiced = (pitch > 20).float()
         prediction = self.speech_predictor(
-            texts, text_lengths, alignment, pitch, energy, voiced
+            texts,
+            text_lengths,
+            alignment_fine,
+            pitch,
+            energy,
+            voiced,
+            speech_style,
+            # denormalize_log2(pitch, voiced, self.pitch_log2_mean, self.pitch_log2_std),
+            pitch,
         )
         audio = rearrange(prediction.audio, "1 1 l -> l")
         return audio

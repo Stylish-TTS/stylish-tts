@@ -2,6 +2,7 @@ import math
 import torch
 from torch.nn import functional as F
 from torch.nn.utils import spectral_norm
+from torch.nn.utils.parametrizations import weight_norm
 from torchaudio.models import Conformer
 
 
@@ -144,6 +145,60 @@ class MelStyleEncoder(torch.nn.Module):
         self.unshared = torch.nn.Linear(dim_out, style_dim)
 
     def forward(self, x):
+        h = self.shared(x)
+        h = h.view(h.size(0), -1)
+        s = self.unshared(h)
+
+        return s
+
+
+class PitchStyleEncoder(torch.nn.Module):
+    def __init__(
+        self,
+        dim_in=48,
+        style_dim=48,
+        max_conv_dim=384,
+        skip_downsamples=False,
+        coarse_multiplier=4,
+    ):
+        super().__init__()
+        self.coarse_multiplier = coarse_multiplier
+        self.preconv = weight_norm(torch.nn.Conv1d(dim_in + 2, dim_in, 1, 1, 1))
+        blocks = []
+        blocks += [spectral_norm(torch.nn.Conv2d(1, dim_in, 3, 1, 1))]
+
+        dim_out = 0
+        repeat_num = 4
+        for i in range(repeat_num):
+            dim_out = min(dim_in * 2, max_conv_dim)
+            down = "half"
+            if i == repeat_num - 1 and skip_downsamples:
+                down = "none"
+            blocks += [ResBlk(dim_in, dim_out, downsample=down)]
+            dim_in = dim_out
+
+        blocks += [torch.nn.LeakyReLU(0.2)]
+        blocks += [spectral_norm(torch.nn.Conv2d(dim_out, dim_out, 5, 1, 0))]
+        blocks += [torch.nn.AdaptiveAvgPool2d(1)]
+        blocks += [torch.nn.LeakyReLU(0.2)]
+        self.shared = torch.nn.Sequential(*blocks)
+
+        self.unshared = torch.nn.Linear(dim_out, style_dim)
+
+    def forward(self, x, pitch, energy):
+        pitch = pitch.unsqueeze(1)
+        pitch = torch.nn.functional.interpolate(
+            pitch, size=pitch.shape[2] // self.coarse_multiplier, mode="linear"
+        )
+
+        energy = energy.unsqueeze(1)
+        energy = torch.nn.functional.interpolate(
+            energy, size=energy.shape[2] // self.coarse_multiplier, mode="linear"
+        )
+
+        x = torch.cat([x, pitch, energy], dim=1)
+        x = self.preconv(x)
+        x = x.unsqueeze(1)
         h = self.shared(x)
         h = h.view(h.size(0), -1)
         s = self.unshared(h)

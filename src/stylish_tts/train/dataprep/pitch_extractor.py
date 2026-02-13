@@ -1,4 +1,5 @@
 import pathlib, sys
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
@@ -8,7 +9,7 @@ from torch.nn import functional as F
 import librosa
 
 from safetensors.torch import save_file
-from stylish_tts.train.dataprep.align_text import audio_list
+from stylish_tts.train.dataprep.align_text import audio_list, tqdm_wrapper
 import pyworld
 import tqdm
 from stylish_tts.train.dataloader import get_frame_count, get_time_bin
@@ -46,54 +47,66 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
     model = None
     if method == "rmvpe":
         calculate_single = calculate_pitch_rmvpe
-        from .rmvpe import RMVPE
+        from .rmvpe import RMVPE, SAMPLE_RATE
 
         model = RMVPE(
-            hf_hub_download("stylish-tts/pitch_extractor", "rmvpe.safetensors")
+            hf_hub_download("stylish-tts/pitch_extractor", "rmvpe.safetensors"),
+            device=device,
+            hop_length=SAMPLE_RATE
+            // (model_config.sample_rate // model_config.hop_length),
         )
     elif method == "pyworld":
         calculate_single = calculate_pitch_pyworld
     else:
         exit("Invalid pitch calculation method passed")
 
-    with path.open("r") as f:
+    import concurrent.futures
+
+    with path.open("r", encoding="utf-8") as f:
         total_segments = sum(1 for _ in f)
+
+    max_queue_size = workers * 2
+    
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {}
-        iterator = tqdm.tqdm(
-            iterable=audio_list(path, wavdir, model_config),
-            desc="Pitch prep " + label,
-            unit="segments",
-            initial=0,
-            colour="GREEN",
-            dynamic_ncols=True,
+        iterator = tqdm_wrapper(
+            audio_list(path, wavdir, model_config),
             total=total_segments,
-        )
-        for name, text_raw, wave in iterator:
-            future_map[
-                executor.submit(
-                    calculate_single,
-                    name,
-                    text_raw,
-                    wave,
-                    model_config.sample_rate,
-                    model_config.hop_length,
-                    model,
-                    device,
-                )
-            ] = name
-
-        result = {}
-        iterator = tqdm.tqdm(
-            iterable=as_completed(future_map),
             desc="Pitch " + label,
-            unit="segments",
-            initial=0,
-            colour="MAGENTA",
-            dynamic_ncols=True,
-            total=total_segments,
+            color="GREEN",
         )
-        for future in iterator:
+        
+        result = {}
+        
+        for name, text_raw, wave in iterator:
+            while len(future_map) >= max_queue_size:
+                done, _ = concurrent.futures.wait(
+                    future_map.keys(), 
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                
+                for future in done:
+                    if future in future_map:
+                        name_done = future_map.pop(future)
+                        try:
+                            current = future.result()
+                            result[name_done] = current
+                        except Exception as e:
+                            print(f"{name_done} generated an exception: {str(e)}")
+
+            future = executor.submit(
+                calculate_single,
+                name,
+                text_raw,
+                wave,
+                model_config.sample_rate,
+                model_config.hop_length,
+                model,
+                device,
+            )
+            future_map[future] = name
+
+        for future in as_completed(future_map):
             name = future_map[future]
             try:
                 current = future.result()
@@ -123,23 +136,14 @@ def calculate_pitch_pyworld(
 
 def calculate_pitch_rmvpe(name, text_raw, wave, sample_rate, hop_length, model, device):
     zero_value = -10
-    wave_16k = librosa.resample(
-        wave, orig_sr=sample_rate, target_sr=16000, res_type="kaiser_best"
-    )
-
-    pitch_rmvpe = (
-        torch.from_numpy(model.infer_from_audio(wave_16k, device=device))
+    pitch = (
+        torch.from_numpy(
+            model.infer_from_audio(wave, sample_rate=sample_rate, device=device)
+        )
         .float()
         .unsqueeze(0)
-    )  # (1, frames)
-    pitch = torch.nn.functional.interpolate(
-        pitch_rmvpe.unsqueeze(1),  # (1, 1, frames)
-        size=frame_count,
-        mode="linear",
-        align_corners=True,
-    ).squeeze(
-        1
-    )  # (1, frames)
+    )
+    pitch = pitch[:, :-1]
     if torch.any(torch.isnan(pitch)):
         pitch[torch.isnan(pitch)] = zero_value
     return pitch

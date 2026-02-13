@@ -5,7 +5,7 @@ from .prosody_encoder import ProsodyEncoder
 from .duration_predictor import DurationPredictor
 from .pitch_energy_predictor import PitchEnergyPredictor
 from .decoder import Decoder
-from .generator import Generator
+from .generator import UpsampleGenerator, Generator, MultiGenerator
 
 
 class SpeechPredictor(torch.nn.Module):
@@ -13,12 +13,6 @@ class SpeechPredictor(torch.nn.Module):
         super().__init__()
         self.text_encoder = TextEncoder(
             inter_dim=model_config.inter_dim, config=model_config.text_encoder
-        )
-
-        self.style_encoder = TextStyleEncoder(
-            model_config.inter_dim,
-            model_config.style_dim,
-            model_config.style_encoder,
         )
 
         self.decoder = Decoder(
@@ -29,7 +23,7 @@ class SpeechPredictor(torch.nn.Module):
             residual_dim=model_config.decoder.residual_dim,
         )
 
-        # self.generator = Generator(
+        # self.generator = UpsampleGenerator(
         #     style_dim=model_config.style_dim,
         #     resblock_kernel_sizes=model_config.generator.resblock_kernel_sizes,
         #     upsample_rates=model_config.generator.upsample_rates,
@@ -41,17 +35,27 @@ class SpeechPredictor(torch.nn.Module):
         #     gen_istft_hop_size=model_config.generator.gen_istft_hop_size,
         #     sample_rate=model_config.sample_rate,
         # )
-        self.generator = Generator(
+        self.generator = MultiGenerator(
             style_dim=model_config.style_dim,
             n_fft=model_config.n_fft,
             win_length=model_config.win_length,
             hop_length=model_config.hop_length,
+            sample_rate=model_config.sample_rate,
             config=model_config.generator,
         )
 
-    def forward(self, texts, text_lengths, alignment, pitch, energy, voiced):
+    def forward(
+        self,
+        texts,
+        text_lengths,
+        alignment,
+        pitch,
+        energy,
+        voiced,
+        style,
+        denormal_pitch,
+    ):
         text_encoding, _, _ = self.text_encoder(texts, text_lengths)
-        style = self.style_encoder(text_encoding, text_lengths)
         mel, f0_curve = self.decoder(
             text_encoding @ alignment,
             pitch,
@@ -62,7 +66,8 @@ class SpeechPredictor(torch.nn.Module):
         prediction = self.generator(
             mel=mel,
             style=style,
-            pitch=f0_curve,
+            pitch=denormal_pitch,
             energy=energy,
+            voiced=voiced,
         )
         return prediction

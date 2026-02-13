@@ -73,9 +73,15 @@ def log_norm(x, mean, std, dim=2):
     """
     normalized log mel -> mel -> norm -> log(norm)
     """
-    # x = torch.log(torch.exp(x * std + mean).norm(dim=dim))
-    x = (torch.exp(x * std + mean) ** 0.33).sum(dim=dim)
+    # Denormalize
+    x = torch.exp(x * std + mean)
+    x = raw_energy(x)
+    # x = (torch.exp(x * std + mean) ** 0.33).sum(dim=dim)
     return x
+
+
+def raw_energy(x):
+    return x.norm(dim=2)
 
 
 @torch.no_grad()
@@ -94,11 +100,15 @@ def compute_log_mel_stats(
         sample_rate: Target sample rate
 
     Returns:
-        (mean, std, total_frames)
+        (mean, std, energy_mean, energy_std, total_frames)
     """
     import os.path as osp
     import soundfile as sf
     import librosa
+
+    energy_count = 0
+    energy_x = torch.zeros((), dtype=torch.float64)
+    energy_x2 = torch.zeros((), dtype=torch.float64)
 
     count = 0
     sum_x = torch.zeros((), dtype=torch.float64)
@@ -136,8 +146,21 @@ def compute_log_mel_stats(
         sum_x += log_mel.sum(dtype=torch.float64).cpu()
         sum_x2 += (log_mel * log_mel).sum(dtype=torch.float64).cpu()
 
+        energy_mel = torch.log(raw_energy(mel.unsqueeze(1)))
+        energy_count += int(energy_mel.numel())
+        energy_x += energy_mel.sum(dtype=torch.float64).cpu()
+        energy_x2 += (energy_mel * energy_mel).sum(dtype=torch.float64).cpu()
+
+    mean, std = calc_mean_std(sum_x, sum_x2, count)
+    energy_mean, energy_std = calc_mean_std(energy_x, energy_x2, energy_count)
+
+    to_mel.to(mel_device)
+    return mean, std, energy_mean, energy_std, count
+
+
+def calc_mean_std(sum_x, sum_x2, count):
     if count == 0:
-        return -4.0, 4.0, 0
+        return -4.0, 4.0
     mean = sum_x / count
     if count > 1:
         var = (sum_x2 - count * mean * mean) / (count - 1)
@@ -145,8 +168,7 @@ def compute_log_mel_stats(
         var = torch.tensor(16.0, dtype=torch.float64)
     std = torch.sqrt(torch.clamp(var, min=1e-12))
 
-    to_mel.to(mel_device)
-    return float(mean.item()), float(std.item()), int(count)
+    return float(mean.item()), float(std.item())
 
 
 def plot_spectrogram_to_figure(
@@ -336,7 +358,7 @@ def save_git_diff(out_dir):
     commit_hash = get_git_commit_hash()
     diff = get_git_diff()
     diff_file = os.path.join(out_dir, "git_state.txt")
-    with open(diff_file, "w") as f:
+    with open(diff_file, "w", encoding="utf-8") as f:
         f.write(f"Git commit hash or version: {commit_hash}\n\n")
         f.write(diff)
     print(f"Git diff saved to {diff_file}")
@@ -467,12 +489,16 @@ class DurationProcessor(torch.nn.Module):
         dur = softdur * mask
         return dur
 
-    def duration_to_alignment(self, duration: torch.Tensor) -> torch.Tensor:
+    def duration_to_alignment(
+        self, duration: torch.Tensor, multiplier=1
+    ) -> torch.Tensor:
         """Convert a sequence of duration values to an attention matrix.
 
         duration -- [t]ext length
         result -- [t]ext length x [a]udio length"""
         total_dur = duration.sum(dim=1).round().max().long().item()
+        total_dur = total_dur * multiplier
+        duration = duration * multiplier
 
         upper_bound = torch.cumsum(duration, dim=1)
         lower_bound = upper_bound - duration
@@ -493,8 +519,8 @@ class DurationProcessor(torch.nn.Module):
         #     alignment = alignment + coefficient * (x * (2 / (duration.unsqueeze(2) + 6))) ** power
 
         # duration = torch.nn.functional.pad(duration, (1, 1))
-        lower_bound -= 2
-        upper_bound += 2
+        lower_bound -= 3
+        upper_bound += 3
         mask = (sequence > lower_bound.unsqueeze(2)) * (
             sequence < upper_bound.unsqueeze(2)
         )
@@ -515,9 +541,9 @@ class DurationProcessor(torch.nn.Module):
     #     result[indices, torch.arange(indices.shape[0])] = 1
     #     return result
 
-    def forward(self, pred, text_length):
+    def forward(self, pred, text_length, multiplier=1):
         duration = self.prediction_to_duration(pred, text_length)
-        alignment = self.duration_to_alignment(duration)
+        alignment = self.duration_to_alignment(duration, multiplier)
         return alignment
 
 
@@ -534,3 +560,42 @@ def torch_empty_cache(device):
         pass
     else:
         exit(f"Unknown device {device}. Could not empty cache.")
+
+
+@torch.no_grad()
+def calculate_mel(audio, to_mel, mean, std):
+    mel = to_mel(audio)
+    mel = (torch.log(1e-5 + mel) - mean) / std
+    # STFT returns audio_len // hop_len + 1, so we strip off the extra here
+    mel = mel[:, :, : (mel.shape[-1] - mel.shape[-1] % 2)]
+    mel_length = torch.full(
+        [audio.shape[0]], mel.shape[2], dtype=torch.long, device=audio.device
+    )
+    return mel, mel_length
+
+
+def normalize_log2(f0, log_f0_mean, log_f0_std):
+    """
+    Normalizes f0 using pre-calculated log-scale z-score statistics.
+    """
+
+    f0 = torch.clamp(f0, min=1)
+    log_f0 = torch.log(f0 + 1e-8)
+    # normed_f0 = (log_f0 - log_f0_mean) / log_f0_std
+    # return normed_f0
+    return log_f0
+
+
+def denormalize_log2(
+    normed_f0,
+    log_f0_mean,
+    log_f0_std,
+):
+    """
+    Denormalizes f0 from z-score + log-scale, WITH a safety clamp.
+    """
+    # log_f0 = normed_f0 * log_f0_std + log_f0_mean
+    log_f0 = normed_f0
+    f0 = torch.exp(log_f0)
+    f0 = torch.clamp(f0, min=1)
+    return f0

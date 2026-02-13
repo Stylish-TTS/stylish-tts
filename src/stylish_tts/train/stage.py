@@ -9,6 +9,8 @@ import torch
 from munch import Munch
 import tqdm
 import matplotlib.pyplot as plt
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
 
 from stylish_tts.train.loss_log import combine_logs
 from stylish_tts.train.stage_type import stages, is_valid_stage, valid_stage_list
@@ -74,13 +76,13 @@ class Stage:
         if osp.isfile(batch_file):
             modified = os.stat(batch_file).st_mtime
             if self.last_batch_load is None or modified > self.last_batch_load:
-                with open(batch_file, "r") as batch_input:
+                with open(batch_file, "r", encoding="utf-8") as batch_input:
                     self.batch_sizes = json.load(batch_input)
                     self.last_batch_load = modified
 
     def save_batch_sizes(self) -> None:
         batch_file = osp.join(self.out_dir, f"{self.name}_batch_sizes.json")
-        with open(batch_file, "w") as o:
+        with open(batch_file, "w", encoding="utf-8") as o:
             json.dump(self.batch_sizes, o)
 
     def get_steps_per_val(self) -> int:
@@ -114,7 +116,8 @@ class Stage:
         else:
             # TODO: Fix hardcoded value
             disc_index = random.randrange(3)
-        result, target_spec, pred_spec = self.train_fn(
+            # disc_index = 0
+        result, target_spec, pred_spec, target_audio, pred_audio = self.train_fn(
             batch, model, train, probing, disc_index
         )
         optimizer_step(self.optimizer, config.train_models)
@@ -125,17 +128,27 @@ class Stage:
             d_loss = train.discriminator_loss(
                 target_list=target_spec,
                 pred_list=pred_spec,
+                target_audio=target_audio[0],
+                pred_audio=pred_audio[0],
                 used=config.discriminators,
                 index=disc_index,
             )
             train.accelerator.backward(d_loss * math.sqrt(batch.text.shape[0]))
-            disc_list = [f"mrd{disc_index}"]
+            if "pitch_disc" in config.discriminators:
+                disc_list = ["pitch_disc"]
+            elif "dur_disc" in config.discriminators:
+                disc_list = ["dur_disc"]
+            else:
+                disc_list = [f"mrd{disc_index}", "disc"]
             optimizer_step(self.optimizer, disc_list)  # config.discriminators)
             train.stage.optimizer.zero_grad()
             result.add_loss("discriminator", d_loss)
         return result.detach()
 
     def validate(self, train):
+        # train.pe_style_array = np.stack(list(train.pe_style_dict.values()))
+        # train.pe_knn = NearestNeighbors(algorithm="ball_tree")
+        # train.pe_knn.fit(train.pe_style_array)
         sample_count = train.config.validation.sample_count
         for key in train.model:
             train.model[key].eval()
@@ -329,7 +342,7 @@ def prepare_batch(
     prepared = {}
     for i, key in enumerate(batch_names):
         if key in keys_to_transfer:
-            if key != "paths":
+            if key != "path":
                 prepared[key] = inputs[i].to(device)
             else:
                 prepared[key] = inputs[i]

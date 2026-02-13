@@ -175,6 +175,7 @@ def train_model(
         multispeaker=train.model_config.multispeaker,
         stage=stage,
         train=train,
+        hop_length=train.model_config.hop_length,
     )
     train.val_dataloader = train.accelerator.prepare(train.val_dataloader)
     train.duration_loss = DurationLoss(
@@ -205,11 +206,17 @@ def train_model(
         mrd0=train.model.mrd0,
         mrd1=train.model.mrd1,
         mrd2=train.model.mrd2,
+        disc=train.model.disc,
+        pitch=train.model.pitch_disc,
+        duration=train.model.dur_disc,
     ).to(train.config.training.device)
     train.discriminator_loss = DiscriminatorLoss(
         mrd0=train.model.mrd0,
         mrd1=train.model.mrd1,
         mrd2=train.model.mrd2,
+        disc=train.model.disc,
+        pitch=train.model.pitch_disc,
+        duration=train.model.dur_disc,
     ).to(train.config.training.device)
     train.wavlm_loss = WavLMLoss(
         train.model_config.slm.model,
@@ -266,13 +273,6 @@ def train_model(
         train.manifest.best_loss = float("inf")  # best test loss
         torch_empty_cache(train.config.training.device)
         # save_checkpoint(train, prefix="checkpoint_test", long=False)
-        # from models.stft import STFT
-        # stft = STFT(
-        #     filter_length=train.model_config.generator.gen_istft_n_fft,
-        #     hop_length=train.model_config.generator.gen_istft_hop_size,
-        #     win_length=train.model_config.generator.gen_istft_n_fft,
-        # )
-        # train.model.speech_predictor.generator.stft = stft.to(train.config.training.device).eval()
         # train.stage.validate(train)
         # exit(0)
         if not train.stage.batch_sizes_exist():

@@ -29,10 +29,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         alignment_path,
         duration_processor,
     ):
-        self.pitch = {}
-        with safe_open(pitch_path, framework="pt", device="cpu") as f:
-            for key in f.keys():
-                self.pitch[key] = f.get_tensor(key)
+        self.pitch = {"a": torch.rand(1, 100)}
         durations = torch.zeros([16], device="cpu")
         self.alignment = {}
         if osp.isfile(alignment_path):
@@ -64,7 +61,9 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.root_path = root_path
         self.multispeaker = model_config.multispeaker
         self.sample_rate = model_config.sample_rate
-        self.hop_length = model_config.hop_length
+        self.coarse_hop_length = (
+            model_config.hop_length * model_config.coarse_multiplier
+        )
 
     def time_bins(self):
         sample_lengths = []
@@ -94,7 +93,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         logger.info(f"Total segment lengths: {total_audio_length / 3600.0:.2f}h")
         for i in range(len(sample_lengths)):
             phonemes = self.data_list[i][1]
-            bin_num = get_time_bin(sample_lengths[i], self.hop_length)
+            bin_num = get_time_bin(sample_lengths[i], self.coarse_hop_length)
             if get_frame_count(bin_num) < len(phonemes):
                 exit(
                     f"Segment audio is too short for the number of phonemes. Remove it from the dataset: {self.data_list[i][0]}"
@@ -163,20 +162,17 @@ class FilePathDataset(torch.utils.data.Dataset):
 
         pad_start = 5000
         pad_end = 5000
-        time_bin = get_time_bin(wave.shape[0], self.hop_length)
+        time_bin = get_time_bin(wave.shape[0], self.coarse_hop_length)
         if time_bin != -1:
             frame_count = get_frame_count(time_bin)
-            pad_start = (frame_count * self.hop_length - wave.shape[0]) // 2
-            pad_end = frame_count * self.hop_length - wave.shape[0] - pad_start
+            pad_start = (frame_count * self.coarse_hop_length - wave.shape[0]) // 2
+            pad_end = frame_count * self.coarse_hop_length - wave.shape[0] - pad_start
         wave = np.concatenate(
             [np.zeros([pad_start]), wave, np.zeros([pad_end])], axis=0
         )
         wave = torch.from_numpy(wave).float()
 
         text = self.text_cleaner(text)
-
-        text.insert(0, 0)
-        text.append(0)
         text = torch.LongTensor(text)
 
         return (wave, text, speaker_id)
@@ -188,12 +184,11 @@ class Collater(object):
       adaptive_batch_size (bool): if true, decrease batch size when long data comes.
     """
 
-    def __init__(self, return_wave=False, multispeaker=False, *, stage, train):
+    def __init__(self, return_wave=False, multispeaker=False, *, stage, hop_length):
         self.return_wave = return_wave
         self.multispeaker = multispeaker
         self.stage = stage
-        self.train = train
-        self.hop_length = train.model_config.hop_length
+        self.hop_length = hop_length
 
     def __call__(self, batch):
         batch_size = len(batch)
@@ -227,10 +222,12 @@ class Collater(object):
             text_lengths[bid] = text_size
             paths[bid] = path
             waves[bid] = wave
+            # TODO: The 4 here and in alignments is a kludge, probably should be removed
             if self.stage != "alignment":
                 if pitch is None:
                     exit(f"Pitch not found for segment {path}")
                 pitches[bid] = pitch
+                # pitches[bid] = torch.repeat_interleave(pitch, 4, dim=-1)
 
             # alignments[bid, :text_size, : mel_length // 2] = duration
             # pred_dur = duration[0]
@@ -275,10 +272,11 @@ def build_dataloader(
     epoch=1,
     *,
     stage,
+    hop_length,
     train,
 ):
     collate_config["multispeaker"] = multispeaker
-    collate_fn = Collater(stage=stage, train=train, **collate_config)
+    collate_fn = Collater(stage=stage, hop_length=hop_length, **collate_config)
     drop_last = not validation and probe_batch_size is not None
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -376,20 +374,27 @@ class DynamicBatchSampler(torch.utils.data.Sampler):
             else:
                 samples[key] = remaining
             yield batch
-            self.train.stage.load_batch_sizes()
+            if self.train is not None:
+                self.train.stage.load_batch_sizes()
             sample_keys = list(samples.keys())
 
     def __len__(self):
-        return self.train.stage.get_steps_per_epoch()
-        total = 0
-        for key in self.time_bins.keys():
-            val = self.time_bins[key]
-            total_batch = self.train.stage.get_batch_size(key)
-            if total_batch > 0:
-                total += len(val) // total_batch
-                if not self.drop_last and len(val) % total_batch != 0:
-                    total += 1
-        return total
+        if self.train is not None:
+            return self.train.stage.get_steps_per_epoch()
+        else:
+            result = 0
+            for key in self.time_bins.keys():
+                result += len(self.time_bins[key])
+            return result
+        # total = 0
+        # for key in self.time_bins.keys():
+        #     val = self.time_bins[key]
+        #     total_batch = self.train.stage.get_batch_size(key)
+        #     if total_batch > 0:
+        #         total += len(val) // total_batch
+        #         if not self.drop_last and len(val) % total_batch != 0:
+        #             total += 1
+        # return total
 
     def set_epoch(self, epoch):
         self.epoch = epoch
@@ -404,22 +409,24 @@ class DynamicBatchSampler(torch.utils.data.Sampler):
     def get_batch_size(self, key):
         if self.force_batch_size is not None:
             return self.force_batch_size
-        else:
+        elif self.train is not None:
             return self.train.stage.get_batch_size(key)
+        else:
+            return 1
 
 
 def get_frame_count(i):
     return i * 20 + 20 + 40
 
 
-def get_time_bin(sample_count, hop_length):
+def get_time_bin(sample_count, coarse_hop_length):
     result = -1
-    frames = sample_count // hop_length
+    frames = sample_count // coarse_hop_length
     if frames >= 20:
         result = (frames - 20) // 20
     return result
 
 
-def get_padded_time_bin(sample_count, hop_length):
-    frames = sample_count // hop_length
+def get_padded_time_bin(sample_count, coarse_hop_length):
+    frames = sample_count // coarse_hop_length
     return (frames - 60) // 20

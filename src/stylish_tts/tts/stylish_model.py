@@ -22,16 +22,18 @@ class StylishModel:
         tokens = np.expand_dims(tokens, 0)
         return tokens
 
-    def generate_speech(self, tokens):
-        texts = np.zeros([1, tokens.shape[1] + 2], dtype=int)
-        texts[0][1 : tokens.shape[1] + 1] = tokens
+    def generate_speech(self, tokens, styles):
+        texts = tokens
         text_lengths = np.zeros([1], dtype=int)
-        text_lengths[0] = tokens.shape[1] + 2
+        text_lengths[0] = tokens.shape[1]
         outputs = self.model.run(
             None,
             {
                 "texts": texts,
                 "text_lengths": text_lengths,
+                "speech_style": styles[0],
+                "pe_style": styles[1],
+                "duration_style": styles[2],
             },
         )
         return outputs[0]

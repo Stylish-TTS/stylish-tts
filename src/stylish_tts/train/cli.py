@@ -126,7 +126,21 @@ def train_align(config_path, model_config_path, out, checkpoint, reset_stage):
     type=str,
     help="Model configuration (optional), defaults to known-good model parameters.",
 )
-def align(config_path, model_config_path):
+@click.option(
+    "--method",
+    type=click.Choice(["k2", "torch"], case_sensitive=False),
+    default="k2",
+    help="Method for forced alignment. 'k2' (process multiple samples simultaneously), 'torch' (one sample at a time). Default: k2",
+)
+@click.option(
+    "-bs",
+    "--batch-size",
+    "batch_size",
+    default=8,
+    type=int,
+    help="Number of samples to process simultaneously (only works if method is k2), default to 8.",
+)
+def align(config_path, model_config_path, method, batch_size):
     """Align dataset
 
     <config_path> is your main configuration file. Use an alignment model to precache the alignments for your dataset. <config_path> is your main configuration file and the alignment model will be loaded from <path>/<alignment_model_path>. The alignments are saved to <path>/<alignment_path> as specified in the dataset section. 'scores_val.txt' and 'scores_train.txt' containing confidence scores for each segment will be written to the dataset <path>.
@@ -136,7 +150,52 @@ def align(config_path, model_config_path):
     model_config = get_model_config(model_config_path)
     from stylish_tts.train.dataprep.align_text import align_text
 
-    align_text(config, model_config)
+    align_text(config, model_config, method, batch_size)
+
+
+##### align-textgrid #####
+
+@cli.command(
+    "align-textgrid",
+    short_help="Use a pretrained alignment model to create a cache of alignments for training."
+)
+@click.argument(
+    "audio_path",
+    type=str,
+)
+@click.argument(
+    "text",
+    type=str,
+)
+@click.argument(
+    "config_path",
+    type=str,
+)
+@click.option(
+    "-mc",
+    "--model-config",
+    "model_config_path",
+    default="",
+    type=str,
+    help="Model configuration (optional), defaults to known-good model parameters.",
+)
+@click.option(
+    "--method",
+    type=click.Choice(["k2", "torch"], case_sensitive=False),
+    default="k2",
+    help="Method for forced alignment. 'k2' (process multiple samples simultaneously), 'torch' (one sample at a time). Default: k2",
+)
+def align_textgrid(audio_path, text, config_path, model_config_path, method):
+    """Align single sample and save as .textgrid
+
+    <config_path> is your main configuration file. Use an alignment model to precache the alignments for your dataset. <config_path> is your main configuration file and the alignment model will be loaded from <path>/<alignment_model_path>. The alignments are saved to <path>/<alignment_path> as specified in the dataset section. 'scores_val.txt' and 'scores_train.txt' containing confidence scores for each segment will be written to the dataset <path>.
+    """
+    print("Calculate alignment...")
+    config = get_config(config_path)
+    model_config = get_model_config(model_config_path)
+    from stylish_tts.train.dataprep.align_textgrid import align_textgrid
+
+    align_textgrid(audio_path, text, config, model_config, method)
 
 
 ##### pitch #####
@@ -268,71 +327,224 @@ def train(config_path, model_config_path, out, stage, checkpoint, reset_stage):
 def convert(config_path, model_config_path, speech, checkpoint):
     """Convert a model to ONNX
 
-    The converted model will be saved in <out-file>.
+    The converted model will be saved to path <speech>.
     """
     print("Convert to ONNX...")
     config = get_config(config_path)
     model_config = get_model_config(model_config_path)
 
-    from stylish_tts.train.train_context import Manifest
+    from pathlib import Path
+    from .cli_util import Checkpoint
+    from stylish_tts.lib.text_utils import TextCleaner
     from stylish_tts.train.convert_to_onnx import convert_to_onnx
-    from stylish_tts.train.models.models import build_model
-    from stylish_tts.train.utils import DurationProcessor
-    from accelerate import Accelerator
-    from accelerate import DistributedDataParallelKwargs
-    from stylish_tts.train.losses import DiscriminatorLoss
+    from stylish_tts.train.dataloader import FilePathDataset
+    from stylish_tts.train.utils import get_data_path_list
 
-    duration_processor = DurationProcessor(
-        class_count=model_config.duration_predictor.duration_classes,
-        max_dur=model_config.duration_predictor.max_duration,
-    ).to(config.training.device)
-    manifest = Manifest()
+    state = Checkpoint(checkpoint, config, model_config)
 
-    ddp_kwargs = DistributedDataParallelKwargs(
-        broadcast_buffers=False, find_unused_parameters=True
+    text_cleaner = TextCleaner(model_config.symbol)
+    datalist = get_data_path_list(Path(config.dataset.path) / config.dataset.train_data)
+    dataset = FilePathDataset(
+        data_list=datalist,
+        root_path=Path(config.dataset.path) / config.dataset.wav_path,
+        text_cleaner=text_cleaner,
+        model_config=model_config,
+        pitch_path=Path(config.dataset.path) / config.dataset.pitch_path,
+        alignment_path=Path(config.dataset.path) / config.dataset.alignment_path,
+        duration_processor=state.duration_processor,
     )
-    accelerator = Accelerator(
-        project_dir=".",
-        split_batches=True,
-        kwargs_handlers=[ddp_kwargs],
-        mixed_precision=config.training.mixed_precision,
-        step_scheduler_with_optimizer=False,
-    )
-    model = build_model(model_config)
-    for key in model:
-        model[key] = accelerator.prepare(model[key])
-        model[key].to(config.training.device)
 
-    disc_loss = DiscriminatorLoss(mrd0=model.mrd0, mrd1=model.mrd1, mrd2=model.mrd2)
+    all_f0 = []
+    for f0 in dataset.pitch.values():
+        all_f0.append(f0[f0 > 10].flatten())
+    all_f0 = torch.cat(all_f0, 0)
+    all_f0 = torch.log2(all_f0 + 1e-9)
+    f0_log2_mean = all_f0.mean().item()
+    f0_log2_std = all_f0.std().item()
 
-    from stylish_tts.train.train_context import NormalizationStats
-
-    norm = NormalizationStats()
-    accelerator.register_for_checkpointing(config)
-    accelerator.register_for_checkpointing(model_config)
-    accelerator.register_for_checkpointing(manifest)
-    accelerator.register_for_checkpointing(disc_loss)
-    accelerator.register_for_checkpointing(norm)
-
-    accelerator.load_state(checkpoint)
+    metadata = {
+        "pitch_log2_mean": str(f0_log2_mean),
+        "pitch_log2_std": str(f0_log2_std),
+        "mel_log_mean": str(state.norm.mel_log_mean),
+        "mel_log_std": str(state.norm.mel_log_std),
+    }
 
     convert_to_onnx(
         model_config,
         speech,
-        model,
+        state.model,
         config.training.device,
-        duration_processor,
+        state.duration_processor,
+        metadata,
     )
-    # Embed normalization stats into ONNX metadata (only if present in checkpoint)
-    from stylish_tts.train.convert_to_onnx import add_meta_data_onnx
 
-    if norm.frames > 0:
-        add_meta_data_onnx(speech, "mel_log_mean", str(norm.mel_log_mean))
-        add_meta_data_onnx(speech, "mel_log_std", str(norm.mel_log_std))
-        logger.info(
-            f"Embedded normalization stats from checkpoint: mean={norm.mel_log_mean:.4f}, std={norm.mel_log_std:.4f}"
-        )
-    else:
-        logger.warning(
-            "Checkpoint did not contain normalization stats; skipping embedding in ONNX."
-        )
+
+@cli.command(short_help="Generate a voice pack.")
+@click.argument(
+    "config_path",
+    type=str,
+)
+@click.option(
+    "-mc",
+    "--model-config",
+    "model_config_path",
+    default="",
+    type=str,
+    help="Model configuration (optional), defaults to known-good model parameters.",
+)
+@click.option("--voicepack", required=True, type=str, help="Path to write voice pack")
+@click.option(
+    "--checkpoint",
+    required=True,
+    type=str,
+    help="Path to a model checkpoint to load for conversion",
+)
+def voicepack(config_path, model_config_path, voicepack, checkpoint):
+    from pathlib import Path
+    from sentence_transformers import SentenceTransformer
+    import torch
+    import torchaudio
+    import tqdm
+    from safetensors.torch import save_file
+    from stylish_tts.train.cli_util import Checkpoint
+    from stylish_tts.train.dataloader import build_dataloader, FilePathDataset
+    from stylish_tts.lib.text_utils import TextCleaner
+    from stylish_tts.train.utils import get_data_path_list, calculate_mel, log_norm
+
+    print("Generate voicepack...")
+    config = get_config(config_path)
+    model_config = get_model_config(model_config_path)
+    device = config.training.device
+    state = Checkpoint(checkpoint, config, model_config)
+    if state.norm.frames <= 0:
+        exit("No normalization state found. Cannot generate voicepack.")
+    sbert = SentenceTransformer("stsb-mpnet-base-v2")
+
+    to_mel = torchaudio.transforms.MelSpectrogram(
+        n_mels=model_config.n_mels,
+        n_fft=model_config.n_fft,
+        win_length=model_config.win_length,
+        hop_length=model_config.hop_length,
+        sample_rate=model_config.sample_rate,
+    ).to(config.training.device)
+
+    to_style_mel = torchaudio.transforms.MelSpectrogram(
+        n_mels=model_config.style_encoder.n_mels,
+        n_fft=model_config.style_encoder.n_fft,
+        win_length=model_config.style_encoder.win_length,
+        hop_length=model_config.style_encoder.hop_length,
+        sample_rate=model_config.sample_rate,
+    ).to(config.training.device)
+    text_cleaner = TextCleaner(model_config.symbol)
+
+    datalist = get_data_path_list(Path(config.dataset.path) / config.dataset.train_data)
+
+    paths = []
+    plaintexts = []
+    for line in datalist:
+        fields = line.strip().split("|")
+        paths.append(fields[0])
+        plaintexts.append(fields[3])
+    sbert_embeddings = sbert.encode(plaintexts)
+
+    path_to_embedding = {}
+    for i in range(len(paths)):
+        path_to_embedding[paths[i]] = sbert_embeddings[i]
+
+    dataset = FilePathDataset(
+        data_list=datalist,
+        root_path=Path(config.dataset.path) / config.dataset.wav_path,
+        text_cleaner=text_cleaner,
+        model_config=model_config,
+        pitch_path=Path(config.dataset.path) / config.dataset.pitch_path,
+        alignment_path=Path(config.dataset.path) / config.dataset.alignment_path,
+        duration_processor=state.duration_processor,
+    )
+
+    time_bins, _ = dataset.time_bins()
+    dataloader = build_dataloader(
+        dataset,
+        time_bins,
+        validation=True,
+        num_workers=0,
+        device=config.training.device,
+        multispeaker=model_config.multispeaker,
+        stage="voicepack",
+        train=None,
+        hop_length=model_config.hop_length,
+    )
+
+    iterator = tqdm.tqdm(
+        iterable=enumerate(dataloader),
+        desc="Generating styles",
+        total=len(datalist),
+        unit="steps",
+        initial=0,
+        colour="GREEN",
+        leave=False,
+        dynamic_ncols=True,
+    )
+    state.model.speech_style_encoder.eval()
+    state.model.pe_style_encoder.eval()
+    state.model.duration_style_encoder.eval()
+    styles = []
+    # styles = [[] for _ in range(512)]
+    for _, batch in iterator:
+        with torch.no_grad():
+            path = batch[3][0]
+            wave = batch[0].to(device)
+            pitch = batch[4].to(device)
+            length = batch[2][0].to(device)
+            energy_mel, _ = calculate_mel(
+                wave,
+                to_mel,
+                state.norm.mel_log_mean,
+                state.norm.mel_log_std,
+            )
+            energy = log_norm(
+                energy_mel.unsqueeze(1),
+                state.norm.mel_log_mean,
+                state.norm.mel_log_std,
+            ).squeeze(1)
+            energy = torch.log(energy + 1e-9)
+            style_mel, _ = calculate_mel(
+                wave, to_style_mel, state.norm.mel_log_mean, state.norm.mel_log_std
+            )
+            speech_style = state.model.speech_style_encoder(style_mel.unsqueeze(1))
+            pe_style = state.model.pe_style_encoder(style_mel, pitch, energy)
+            duration_style = state.model.duration_style_encoder(style_mel.unsqueeze(1))
+
+            embedding = torch.from_numpy(path_to_embedding[path]).to(device)
+            combined = torch.cat(
+                [
+                    speech_style.squeeze(0),
+                    pe_style.squeeze(0),
+                    duration_style.squeeze(0),
+                    embedding,
+                ],
+                dim=0,
+            )
+            styles.append(combined)
+            # styles[length.item() - 1].append(combined)
+
+    # result = []
+    # for i in range(512):
+    #     lower = i
+    #     upper = i + 1
+    #     while total_len(styles[lower:upper]) < 100:
+    #         lower -= 1
+    #         upper += 1
+    #         if lower < 0 and upper > 512:
+    #             exit("Need at least 100 styles to make a voicepack")
+    #     flattened = sum(styles[lower:upper], [])
+    #     average = torch.stack(flattened, dim=0).mean(dim=0)
+    #     result.append(average)
+    result = torch.stack(styles, dim=0)
+    save_file({"voicepack": result}, voicepack)
+
+
+def total_len(listlist):
+    result = 0
+    for item in listlist:
+        result += len(item)
+    return result

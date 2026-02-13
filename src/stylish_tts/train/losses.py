@@ -6,7 +6,8 @@ import torch.nn.functional as F
 import torchaudio
 from transformers import AutoModel
 import numpy as np
-import k2
+
+# import k2
 from einops import rearrange
 from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
 from stylish_tts.train.models.discriminator import run_discriminator_model
@@ -156,26 +157,49 @@ class MagPhaseLoss(torch.nn.Module):
 
 
 class DiscriminatorLoss(torch.nn.Module):
-    def __init__(self, *, mrd0, mrd1, mrd2):
+    def __init__(self, *, mrd0, mrd1, mrd2, disc, pitch, duration):
         super(DiscriminatorLoss, self).__init__()
         self.discriminators = torch.nn.ModuleDict(
             {
                 "mrd0": DiscriminatorLossHelper(mrd0, 1),  # multi_spectrogram_count),
                 "mrd1": DiscriminatorLossHelper(mrd1, 1),  # multi_spectrogram_count),
                 "mrd2": DiscriminatorLossHelper(mrd2, 1),  # multi_spectrogram_count),
+                "disc": DiscriminatorLossHelper(disc, 1),
+                "pitch_disc": DiscriminatorLossHelper(pitch, 1),
+                "dur_disc": DiscriminatorLossHelper(duration, 1),
             }
         )
         self.disc_list = [
             self.discriminators["mrd0"],
             self.discriminators["mrd1"],
             self.discriminators["mrd2"],
+            self.discriminators["disc"],
+            self.discriminators["pitch_disc"],
+            self.discriminators["dur_disc"],
         ]
 
     def get_disc_lr_multiplier(self, key):
         return self.discriminators[key].get_disc_lr_multiplier()
 
-    def forward(self, *, target_list, pred_list, used, index):
-        loss = self.disc_list[index](target=target_list[index], pred=pred_list[index])
+    def forward(self, *, target_list, pred_list, target_audio, pred_audio, used, index):
+        if "pitch_disc" in used:
+            loss = self.discriminators["pitch_disc"](
+                target=target_list[0], pred=pred_list[0]
+            )
+        elif "dur_disc" in used:
+            loss = self.discriminators["dur_disc"](
+                target=target_list[0], pred=pred_list[0]
+            )
+        else:
+            # loss = self.disc_list[index](
+            #     target=target_list[index], pred=pred_list[index]
+            # )
+            loss = 0
+            for i in range(0, 3):
+                loss += self.disc_list[i](target=target_list[i], pred=pred_list[i])
+            loss += 5 * self.discriminators["disc"](
+                target=target_audio, pred=pred_audio
+            )
         # loss = 0
         # for key in used:
         #     loss += self.discriminators[key](
@@ -208,7 +232,7 @@ class DiscriminatorLossHelper(torch.nn.Module):
         self.last_loss = 0.5 * sub_count
         self.ideal_loss = 0.5 * sub_count
         self.f_max = 4.0
-        self.h_min = 0.01
+        self.h_min = 0.003
         self.x_max = 0.05 * sub_count
         self.x_min = 0.05 * sub_count
 
@@ -266,23 +290,42 @@ class DiscriminatorLossHelper(torch.nn.Module):
 
 
 class GeneratorLoss(torch.nn.Module):
-    def __init__(self, *, mrd0, mrd1, mrd2):
+    def __init__(self, *, mrd0, mrd1, mrd2, disc, pitch, duration):
         super(GeneratorLoss, self).__init__()
         self.generators = torch.nn.ModuleDict(
             {
                 "mrd0": GeneratorLossHelper(mrd0),
                 "mrd1": GeneratorLossHelper(mrd1),
                 "mrd2": GeneratorLossHelper(mrd2),
+                "disc": GeneratorLossHelper(disc),
+                "pitch_disc": GeneratorLossHelper(pitch),
+                "dur_disc": GeneratorLossHelper(duration),
             }
         )
         self.gen_list = [
             self.generators["mrd0"],
             self.generators["mrd1"],
             self.generators["mrd2"],
+            self.generators["disc"],
+            self.generators["pitch_disc"],
+            self.generators["dur_disc"],
         ]
 
-    def forward(self, *, target_list, pred_list, used, index):
-        loss = self.gen_list[index](target=target_list[index], pred=pred_list[index])
+    def forward(self, *, target_list, pred_list, target_audio, pred_audio, used, index):
+        if "pitch_disc" in used:
+            loss = self.generators["pitch_disc"](
+                target=target_list[0], pred=pred_list[0]
+            )
+        elif "dur_disc" in used:
+            loss = self.generators["dur_disc"](target=target_list[0], pred=pred_list[0])
+        else:
+            # loss = self.gen_list[index](
+            #     target=target_list[index], pred=pred_list[index]
+            # )
+            loss = 0
+            for i in range(0, 3):
+                loss += self.gen_list[i](target=target_list[i], pred=pred_list[i])
+            loss += 5 * self.generators["disc"](target=target_audio, pred=pred_audio)
         # loss = 0
         # for key in used:
         #     loss += self.generators[key](target_list=target_list, pred_list=pred_list)
@@ -448,6 +491,12 @@ class CTCLossWithLabelPriors(nn.Module):
         self.log_priors_sum = None
         self.num_samples = 0
         self.prior_scaling_factor = prior_scaling_factor  # This corresponds to the `alpha` hyper parameter in the paper
+        self.k2_device = "cpu"
+
+    def to(self, device):
+        super().to(device)
+        # self.k2_device = device if k2.with_cuda else "cpu"
+        return self
 
     def encode_supervisions(
         self, targets, target_lengths, input_lengths
@@ -486,9 +535,7 @@ class CTCLossWithLabelPriors(nn.Module):
             targets, target_lengths, input_lengths
         )
 
-        decoding_graph = k2.ctc_graph(
-            token_ids, modified=False, device=log_probs.device
-        )
+        decoding_graph = k2.ctc_graph(token_ids, modified=False, device=self.k2_device)
 
         # Accumulate label priors for this epoch
         log_probs = log_probs.permute(1, 0, 2)  # (T, N, C) -> (N, T, C)
@@ -517,8 +564,8 @@ class CTCLossWithLabelPriors(nn.Module):
 
         # Compute CTC loss
         dense_fsa_vec = k2.DenseFsaVec(
-            log_probs,  # (N, T, C)
-            supervision_segments,
+            log_probs.to(self.k2_device),  # (N, T, C)
+            supervision_segments.to(self.k2_device),
         )
 
         loss = k2.ctc_loss(
@@ -527,10 +574,49 @@ class CTCLossWithLabelPriors(nn.Module):
             output_beam=10,
             reduction=self.reduction,
             use_double_scores=True,
-            target_lengths=target_lengths,
+            target_lengths=target_lengths.to(self.k2_device),
         )
 
-        return loss
+        return loss.to(log_probs.device)
+
+    def forced_align(
+        self,
+        log_probs: Tensor,
+        targets: Tensor,
+        input_lengths: Tensor,
+        target_lengths: Tensor,
+    ):
+        supervision_segments, token_ids, indices = self.encode_supervisions(
+            targets, target_lengths, input_lengths
+        )
+
+        decoding_graph = k2.ctc_graph(token_ids, modified=False, device=self.k2_device)
+
+        # Compute CTC loss
+        dense_fsa_vec = k2.DenseFsaVec(
+            log_probs.to(self.k2_device),  # (N, T, C)
+            supervision_segments.to(self.k2_device),
+        )
+        lattices = k2.intersect_dense(
+            decoding_graph,
+            dense_fsa_vec,
+            output_beam=10,
+        )
+
+        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        tot_scores = best_paths.get_tot_scores(
+            log_semiring=True, use_double_scores=True
+        )
+        scores = tot_scores / target_lengths.to(tot_scores.device)
+
+        batch_arc_shape = best_paths.arcs.shape().remove_axis(1)
+        batch_frame_labels = k2.RaggedTensor(
+            batch_arc_shape, best_paths.aux_labels
+        ).tolist()
+        # k2 makes an extra frame for some reasons
+        for i in range(len(batch_frame_labels)):
+            batch_frame_labels[i][-1] -= 1
+        return batch_frame_labels, scores
 
     def on_train_epoch_end(self, train):
         if self.log_priors_sum is not None:

@@ -1,3 +1,4 @@
+from functools import partial
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -15,6 +16,7 @@ from stylish_tts.train.utils import DecoderPrediction
 from .ada_norm import AdaptiveGeneratorBlock
 from .ada_norm import AdaptiveLayerNorm
 from .common import get_padding
+from .conv_next import GeneratorConvNeXtBlock
 
 import numpy as np
 
@@ -64,6 +66,7 @@ def padDiff(x):
 class UpsampleGenerator(torch.nn.Module):
     def __init__(
         self,
+        *,
         style_dim,
         resblock_kernel_sizes,
         upsample_rates,
@@ -82,15 +85,21 @@ class UpsampleGenerator(torch.nn.Module):
         self.gen_istft_n_fft = gen_istft_n_fft
         self.gen_istft_hop_size = gen_istft_hop_size
 
-        self.m_source = SourceModuleHnNSF(
-            sampling_rate=sample_rate,
-            upsample_scale=math.prod(upsample_rates) * gen_istft_hop_size,
-            harmonic_num=8,
-            voiced_threshod=10,
+        self.prior_generator = partial(
+            generate_pcph,
+            hop_length=math.prod(upsample_rates) * gen_istft_hop_size,  # hop_length,
+            sample_rate=sample_rate,
         )
-        self.f0_upsamp = torch.nn.Upsample(
-            scale_factor=math.prod(upsample_rates) * gen_istft_hop_size, mode="linear"
-        )
+
+        # self.m_source = SourceModuleHnNSF(
+        #     sampling_rate=sample_rate,
+        #     upsample_scale=math.prod(upsample_rates) * gen_istft_hop_size,
+        #     harmonic_num=8,
+        #     voiced_threshod=10,
+        # )
+        # self.f0_upsamp = torch.nn.Upsample(
+        #     scale_factor=math.prod(upsample_rates) * gen_istft_hop_size, mode="linear"
+        # )
         self.noise_convs = nn.ModuleList()
         self.noise_res = nn.ModuleList()
 
@@ -171,6 +180,7 @@ class UpsampleGenerator(torch.nn.Module):
             self.conformers.append(
                 Conformer(
                     dim=ch,
+                    style_dim=style_dim,
                     depth=2,
                     dim_head=64,
                     heads=8,
@@ -192,32 +202,38 @@ class UpsampleGenerator(torch.nn.Module):
             win_length=self.gen_istft_n_fft,
         )
 
-    def forward(self, mel, style, pitch, energy):
+    def forward(self, mel, style, pitch, energy, voiced):
         # x: [b,d,t]
         x = mel
         f0 = pitch
         s = style
         with torch.no_grad():
-            f0_len = f0.shape[1]
-            f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)  # bs,n,t
-
-            har_source, noi_source, uv = self.m_source(f0, f0_len)
-            har_source = har_source.transpose(1, 2).squeeze(1)
-            har_spec, har_x, har_y = self.stft.transform(har_source)
+            prior = self.prior_generator(pitch.unsqueeze(1), voiced.unsqueeze(1))
+            prior = prior.squeeze(1)
+            har_spec, har_x, har_y = self.stft.transform(prior)
+            har_spec = har_spec[:, :, :-1]
             har_phase = torch.atan2(har_y, har_x)
+            har_phase = har_phase[:, :, :-1]
+
+            # f0_len = f0.shape[1]
+            # f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)  # bs,n,t
+            # har_source, noi_source, uv = self.m_source(f0, f0_len)
+            # har_source = har_source.transpose(1, 2).squeeze(1)
+            # har_spec, har_x, har_y = self.stft.transform(har_source)
+            # har_phase = torch.atan2(har_y, har_x)
             har = torch.cat([har_spec, har_phase], dim=1)
 
         for i in range(self.num_upsamples):
             x = x + (1 / self.alphas[i]) * (torch.sin(self.alphas[i] * x) ** 2)
             x = rearrange(x, "b f t -> b t f")
-            x = self.conformers[i](x)
+            x = self.conformers[i](x, style)
             x = rearrange(x, "b t f -> b f t")
 
             x = self.ups[i](x)
             x_source = self.noise_convs[i](har)
-            # if i == self.num_upsamples - 1:
-            #     x = self.reflection_pad(x)
-            #     x_source = self.reflection_pad(x_source)
+            if i == self.num_upsamples - 1:
+                # x = self.reflection_pad(x)
+                x_source = self.reflection_pad(x_source)
 
             x_source = self.noise_res[i](x_source, s)
 
@@ -495,85 +511,195 @@ class SourceModuleHnNSF(torch.nn.Module):
 
 
 class Generator(torch.nn.Module):
-    def __init__(self, *, style_dim, n_fft, win_length, hop_length, config):
+    def __init__(
+        self,
+        *,
+        style_dim,
+        n_fft,
+        win_length,
+        hop_length,
+        sample_rate,
+        scale,
+        scalehop,
+        start_fft,
+        hidden_dim,
+        input_dim,
+        conv_intermediate_dim,
+        io_conv_kernel_size,
+        conformer_layers,
+        conv_layers,
+        upsample_rates,
+    ):
         super(Generator, self).__init__()
 
-        self.amp_input_conv = Conv1d(
-            config.input_dim,
-            config.hidden_dim,
-            config.io_conv_kernel_size,
+        self.scale = scale
+        self.scalehop = scalehop
+        self.start_fft = start_fft
+        self.end_fft = start_fft + hidden_dim
+        self.hidden_dim = hidden_dim
+        self.fft_dim = n_fft // self.scale // 2 + 1
+
+        self.upsample_rates = upsample_rates
+        self.amp_layers = conv_layers - len(upsample_rates)
+        # io_conv_kernel_size = io_conv_kernel_size * scale
+
+        self.amp_convnext = nn.ModuleList(
+            [
+                GeneratorConvNeXtBlock(
+                    dim=input_dim,
+                    intermediate_dim=input_dim * 4,
+                    style_dim=style_dim,
+                )
+                for _ in range(self.amp_layers)
+            ]
+        )
+        # self.upsamples = nn.ModuleList()
+        self.upconvs = nn.ModuleList()
+        self.upblocks = nn.ModuleList()
+        after_dim = input_dim
+        for i, stride in enumerate(self.upsample_rates):
+            before_dim = after_dim
+            after_dim = after_dim // 2
+            # kernel = stride * 2
+
+            # self.upsamples.append(
+            #     weight_norm(
+            #         ConvTranspose1d(
+            #             before_dim,
+            #             after_dim,
+            #             kernel,
+            #             stride,
+            #             padding=(kernel - stride) // 2,
+            #         )
+            #     )
+            # )
+            self.upconvs.append(
+                Conv1d(
+                    before_dim,
+                    after_dim * stride,
+                    11,
+                    1,
+                    padding=get_padding(11, 1),
+                )
+            )
+            self.upblocks.append(
+                GeneratorConvNeXtBlock(
+                    dim=after_dim,
+                    intermediate_dim=after_dim * 4,
+                    style_dim=style_dim,
+                )
+            )
+
+        # self.prior_generator = partial(
+        #     generate_pcph,
+        #     hop_length=hop_length,
+        #     sample_rate=sample_rate,
+        # )
+        self.m_source = SourceModuleHnNSF(
+            sampling_rate=sample_rate,
+            upsample_scale=hop_length,
+            harmonic_num=8,
+            voiced_threshod=10,
+        )
+        self.f0_upsamp = torch.nn.Upsample(scale_factor=hop_length, mode="linear")
+
+        self.amp_prior_conv = Conv1d(
+            hidden_dim,
+            hidden_dim,
+            io_conv_kernel_size,
             1,
-            padding=get_padding(config.io_conv_kernel_size, 1),
+            padding=get_padding(io_conv_kernel_size, 1),
+        )
+
+        self.phase_prior_conv = Conv1d(
+            hidden_dim,
+            hidden_dim,
+            io_conv_kernel_size,
+            1,
+            padding=get_padding(io_conv_kernel_size, 1),
+        )
+
+        self.amp_prior_block = AdaptiveGeneratorBlock(
+            channels=hidden_dim,
+            style_dim=style_dim,
+            kernel_size=11,
+            dilation=[1, 3, 5],
+        )
+
+        self.phase_prior_block = AdaptiveGeneratorBlock(
+            channels=hidden_dim,
+            style_dim=style_dim,
+            kernel_size=11,
+            dilation=[1, 3, 5],
+        )
+
+        self.phase_input_conv = Conv1d(
+            hidden_dim * 3,
+            hidden_dim,
+            io_conv_kernel_size,
+            1,
+            padding=get_padding(io_conv_kernel_size, 1),
         )
 
         self.amp_output_conv = Conv1d(
-            config.hidden_dim,
-            n_fft // 2 + 1,
-            config.io_conv_kernel_size,
+            hidden_dim,
+            hidden_dim,
+            io_conv_kernel_size,
             1,
-            padding=get_padding(config.io_conv_kernel_size, 1),
+            padding=get_padding(io_conv_kernel_size, 1),
         )
 
         self.phase_output_real_conv = Conv1d(
-            config.hidden_dim,
-            n_fft // 2 + 1,
-            config.io_conv_kernel_size,
+            hidden_dim,
+            hidden_dim,
+            io_conv_kernel_size,
             1,
-            padding=get_padding(config.io_conv_kernel_size, 1),
+            padding=get_padding(io_conv_kernel_size, 1),
         )
         self.phase_output_imag_conv = Conv1d(
-            config.hidden_dim,
-            n_fft // 2 + 1,
-            config.io_conv_kernel_size,
+            hidden_dim,
+            hidden_dim,
+            io_conv_kernel_size,
             1,
-            padding=get_padding(config.io_conv_kernel_size, 1),
+            padding=get_padding(io_conv_kernel_size, 1),
         )
 
-        self.amp_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
-        self.phase_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
-        self.phase_conformer = Conformer(
-            dim=config.hidden_dim,
-            style_dim=style_dim,
-            depth=config.conformer_layers,
-            attn_dropout=0.2,
-            ff_dropout=0.2,
-            conv_dropout=0.2,
-        )
+        self.phase_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        # self.phase_conformer = Conformer(
+        #     dim=config.hidden_dim,
+        #     style_dim=style_dim,
+        #     depth=config.conformer_layers,
+        #     attn_dropout=0.2,
+        #     ff_dropout=0.2,
+        #     conv_dropout=0.2,
+        # )
         self.phase_convnext = nn.ModuleList(
             [
-                ConvNeXtBlock(
-                    dim=config.hidden_dim,
-                    intermediate_dim=config.conv_intermediate_dim,
+                GeneratorConvNeXtBlock(
+                    dim=hidden_dim,
+                    intermediate_dim=hidden_dim * 4,
                     style_dim=style_dim,
                 )
-                for _ in range(config.conv_layers)
+                for _ in range(conv_layers)
             ]
         )
-        self.amp_conformer = Conformer(
-            dim=config.hidden_dim,
-            style_dim=style_dim,
-            depth=config.conformer_layers,
-            attn_dropout=0.2,
-            ff_dropout=0.2,
-            conv_dropout=0.2,
-        )
-        self.amp_convnext = nn.ModuleList(
-            [
-                ConvNeXtBlock(
-                    dim=config.hidden_dim,
-                    intermediate_dim=config.conv_intermediate_dim,
-                    style_dim=style_dim,
-                )
-                for _ in range(config.conv_layers)
-            ]
-        )
-        self.amp_final_layer_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
-        self.phase_final_layer_norm = nn.LayerNorm(config.hidden_dim, eps=1e-6)
+        self.amp_final_layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.phase_final_layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
         self.apply(self._init_weights)
-        self.stft = TorchSTFT(
-            filter_length=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
+        # self.stft = TorchSTFT(
+        #     filter_length=n_fft,
+        #     hop_length=hop_length,
+        #     win_length=win_length,
+        # )
+        # self.prior_stft = STFT(
+        #     filter_length=n_fft,
+        #     hop_length=hop_length,
+        #     win_length=win_length,
+        # )
+        self.stft = STFT(
+            filter_length=n_fft // self.scale,
+            hop_length=hop_length // self.scalehop,
+            win_length=win_length // self.scale,
         )
 
     def _init_weights(self, m):
@@ -581,23 +707,69 @@ class Generator(torch.nn.Module):
             nn.init.trunc_normal_(m.weight, std=0.02)
             nn.init.constant_(m.bias, 0)
 
-    def forward(self, *, mel, style, pitch, energy):
-        logamp = self.amp_input_conv(mel)
-        logamp = logamp.transpose(1, 2)
-        logamp = self.amp_norm(logamp)
-        logamp = self.amp_conformer(logamp, style)
-        logamp = logamp.transpose(1, 2)
-        for conv_block in self.amp_convnext:
-            logamp = conv_block(logamp, style)
+    def forward(self, *, mel, style, pitch, energy, voiced):
+        with torch.no_grad():
+            # pitch = F.interpolate(
+            #     pitch.unsqueeze(1),
+            #     scale_factor=self.prod_up_factors,
+            #     mode="linear",
+            #     align_corners=False,
+            # )
+            # prior = self.prior_generator(pitch.unsqueeze(1), voiced.unsqueeze(1))
+            # prior = prior.squeeze(1)
+            pitch_len = pitch.shape[1]
+            pitch = self.f0_upsamp((pitch * voiced)[:, None]).transpose(1, 2)  # bs,n,t
+            prior, _, _ = self.m_source(pitch, pitch_len)
+            prior = prior.squeeze(2)
+            har_spec, har_x, har_y = self.stft.transform(prior)
+            har_spec = har_spec[:, :, :-1]
+            har_spec = har_spec[:, self.start_fft : self.end_fft, :]
+            har_phase = torch.atan2(har_y, har_x)
+            har_phase = har_phase[:, :, :-1]
+            har_phase = har_phase[:, self.start_fft : self.end_fft, :]
 
+        logamp_prior = self.amp_prior_conv(har_spec)
+        logamp_prior = self.amp_prior_block(logamp_prior, style)
+        phase_prior = self.phase_prior_conv(har_phase)
+        phase_prior = self.phase_prior_block(phase_prior, style)
+        # logamp = mel
+        # logamp_in = torch.cat([mel, logamp_prior], dim=1)
+
+        ##########
+        for conv_block in self.amp_convnext:
+            mel = conv_block(mel, style)
+
+        for i, (conv, block) in enumerate(zip(self.upconvs, self.upblocks)):
+            # mel = torch.nn.functional.interpolate(
+            #     mel, scale_factor=self.upsample_rates[i], mode="linear"
+            # )
+            mel = conv(mel)
+            mel = rearrange(mel, "b (c s) t -> b c (t s)", s=self.upsample_rates[i])
+            # mel = up(mel)
+            # mel = mel[:, :, :-1]
+            mel = block(mel, style)
+
+        # logamp = mel[:, self.start_fft:self.end_fft, :]
+        phase_in = mel
+        logamp = mel
+        # phase_in = torch.cat([mel, logamp], dim=1)
         logamp = logamp.transpose(1, 2)
-        phase = logamp
         logamp = self.amp_final_layer_norm(logamp)
         logamp = logamp.transpose(1, 2)
         logamp = self.amp_output_conv(logamp)
+        # logamp = torch.nn.functional.interpolate(
+        #     logamp, scale_factor=self.scalehop, mode="linear"
+        # )
 
+        # phase_in = torch.nn.functional.interpolate(
+        #     phase_in, scale_factor=self.scalehop, mode="linear"
+        # )
+        phase_in = torch.cat([phase_in, logamp_prior, phase_prior], dim=1)
+        phase = self.phase_input_conv(phase_in)
+        # phase = mel[:, self.start_fft:self.end_fft, :]
+        phase = phase.transpose(1, 2)
         phase = self.phase_norm(phase)
-        phase = self.phase_conformer(phase, style)
+        # phase = self.phase_conformer(phase, style)
         phase = phase.transpose(1, 2)
         for conv_block in self.phase_convnext:
             phase = conv_block(phase, style)
@@ -613,66 +785,189 @@ class Generator(torch.nn.Module):
         phase = F.pad(phase, pad=(0, 1), mode="replicate")
 
         spec = torch.exp(logamp)
-        x = torch.cos(phase)
-        y = torch.sin(phase)
+        spec_full = torch.zeros([spec.shape[0], self.fft_dim, spec.shape[2]]).to(
+            spec.device
+        )
+        spec_full[:, self.start_fft : self.end_fft, :] = spec
+        phase_full = torch.zeros([phase.shape[0], self.fft_dim, phase.shape[2]]).to(
+            phase.device
+        )
+        phase_full[:, self.start_fft : self.end_fft, :] = phase
+        x = torch.cos(phase_full)
+        y = torch.sin(phase_full)
 
-        audio = self.stft.inverse(spec, x, y).to(x.device)
+        return self.stft.inverse(spec_full, x, y).to(x.device)
+
+
+class MultiGenerator(torch.nn.Module):
+    def __init__(
+        self, *, style_dim, n_fft, win_length, hop_length, sample_rate, config
+    ):
+
+        # scale, scalehop, start_fft, hidden_dim, input_dim, conv_intermediate_dim, io_conv_kernel_size, conformer_layers, conv_layers,
+        # ):
+        super(MultiGenerator, self).__init__()
+        hidden_dim = n_fft // 2  # // 4
+
+        self.amp_input_conv = Conv1d(
+            config.input_dim,
+            hidden_dim,
+            config.io_conv_kernel_size,
+            1,
+            padding=get_padding(config.io_conv_kernel_size, 1),
+        )
+        self.amp_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.amp_conformer = Conformer(
+            dim=hidden_dim,
+            style_dim=style_dim,
+            depth=config.conformer_layers,
+            attn_dropout=0.2,
+            ff_dropout=0.2,
+            conv_dropout=0.2,
+        )
+
+        self.upsample_rates = [3, 5, 5]
+
+        scale = 1
+        scalehop = 1
+        after_dim = n_fft // 2 // 4
+        self.basegen = Generator(
+            style_dim=style_dim,
+            n_fft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+            sample_rate=sample_rate,
+            # scale=scale,
+            # scalehop=scalehop,
+            # start_fft=0,
+            # hidden_dim=after_dim,
+            scale=8,
+            scalehop=75,
+            start_fft=0,
+            hidden_dim=n_fft // 2 // 8,
+            input_dim=hidden_dim,
+            conv_intermediate_dim=after_dim * 4,
+            io_conv_kernel_size=config.io_conv_kernel_size,
+            conformer_layers=config.conformer_layers,
+            conv_layers=config.conv_layers,
+            # upsample_rates=[],
+            upsample_rates=[3, 5, 5],
+        )
+
+        # self.generators = nn.ModuleList()
+        # for i, stride in enumerate(self.upsample_rates):
+        #     before_dim = after_dim
+        #     after_dim = after_dim // 2
+        #     kernel = stride * 2
+        #     scale = scale * 2
+        #     scalehop = scalehop * stride
+        #     self.generators.append(
+        #         Generator(
+        #             style_dim=style_dim,
+        #             n_fft=n_fft,
+        #             win_length=win_length,
+        #             hop_length=hop_length,
+        #             sample_rate=sample_rate,
+        #             scale=scale,
+        #             scalehop=scalehop,
+        #             start_fft=after_dim * (i+1),
+        #             hidden_dim=after_dim,
+        #             input_dim=hidden_dim,
+        #             conv_intermediate_dim=after_dim,
+        #             io_conv_kernel_size=config.io_conv_kernel_size,
+        #             conformer_layers=config.conformer_layers,
+        #             conv_layers=config.conv_layers,
+        #             upsample_rates=self.upsample_rates[:i+1],
+        #         )
+        #     )
+
+    def forward(self, *, mel, style, pitch, energy, voiced):
+        x = self.amp_input_conv(mel)
+        x = x.transpose(1, 2)
+        x = self.amp_norm(x)
+        x = self.amp_conformer(x, style)
+        x = x.transpose(1, 2)
+        audio = self.basegen(
+            mel=x, style=style, pitch=pitch, energy=energy, voiced=voiced
+        )
+        # for gen in self.generators:
+        #     audio = audio + gen(mel=x, style=style, pitch=pitch, energy=energy, voiced=voiced)
+
         audio = torch.tanh(audio)
         return DecoderPrediction(
             audio=audio,
-            magnitude=logamp,
-            phase=phase,
+            magnitude=None,
+            phase=None,
         )
 
 
-class ConvNeXtBlock(torch.nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        intermediate_dim: int,
-        style_dim,
-    ):
-        super().__init__()
-        self.dwconv = torch.nn.Conv1d(
-            dim, dim, kernel_size=7, padding=3, groups=dim
-        )  # depthwise conv
+def generate_pcph(
+    f0,
+    voiced,
+    hop_length: int,
+    sample_rate: int,
+    noise_amplitude=0.003,
+    random_init_phase=True,
+    power_factor=0.1,
+    max_frequency=None,
+    *args,
+    **kwargs,
+):
+    """
+    Generate pseudo-constant-power harmonic waveforms based on input F0 sequences.
+    The spectral envelope of harmonics is designed to have flat spectral envelopes.
 
-        self.norm = AdaptiveLayerNorm(style_dim, dim, eps=1e-6)
-        self.pwconv1 = torch.nn.Linear(
-            dim, intermediate_dim
-        )  # pointwise/1x1 convs, implemented with linear layers
-        self.snake = torch.nn.Parameter(torch.ones(1, 1, intermediate_dim))
-        self.grn = GRN(intermediate_dim)
-        self.pwconv2 = torch.nn.Linear(intermediate_dim, dim)
+    Args:
+        f0 (Tensor): F0 sequences with shape (batch, 1, frames).
+        hop_length (int): Hop length of the F0 sequence.
+        sample_rate (int): Sampling frequency of the waveform in Hz.
+        noise_amplitude (float, optional): Amplitude of the noise component (default: 0.01).
+        random_init_phase (bool, optional): Whether to initialize phases randomly (default: True).
+        power_factor (float, optional): Factor to control the power of harmonics (default: 0.1).
+        max_frequency (float, optional): Maximum frequency to define the number of harmonics (default: None).
 
-    def act(self, x):
-        return x + (1 / self.snake) * (torch.sin(self.snake * x) ** 2)
+    Returns:
+        Tensor: Generated harmonic waveform with shape (batch, 1, frames * hop_length).
+    """
+    batch, _, frames = f0.size()
+    device = f0.device
+    vuv = voiced.round().bool()
 
-    def forward(self, x, style):
-        residual = x
-        x = self.dwconv(x)
-        x = x.transpose(1, 2)  # (B, C, T) -> (B, T, C)
-        x = self.norm(x, style)
-        x = self.pwconv1(x)
-        x = self.act(x)
-        x = self.grn(x)
-        x = self.pwconv2(x)
+    # f0 = f0 * vuv
+    # min_f0_value = torch.min(f0[f0 > 20]).item()
+    max_frequency = max_frequency if max_frequency is not None else sample_rate / 2
+    max_n_harmonics = 16  # min(16, int(max_frequency / min_f0_value))
+    # n_harmonics = torch.ones_like(f0, dtype=torch.float)
+    # n_harmonics = torch.clamp(vuv * (sample_rate / 2.0 / torch.clamp(f0, min=1)), min=1) # f0[vuv]
 
-        x = x.transpose(1, 2)  # (B, T, C) -> (B, C, T)
+    indices = torch.arange(1, max_n_harmonics + 1, device=device).reshape(1, -1, 1)
+    harmonic_f0 = f0 * indices
 
-        x = residual + x
-        return x
+    # Compute harmonic mask
+    harmonic_mask = harmonic_f0 <= (sample_rate / 2.0)
+    n_harmonics = torch.clamp(vuv * harmonic_mask.sum(dim=1, keepdim=True), min=1)
+    harmonic_mask = torch.repeat_interleave(harmonic_mask, hop_length, dim=2)
 
+    # Compute harmonic amplitude
+    harmonic_amplitude = vuv * power_factor * torch.sqrt(2.0 / n_harmonics)
+    harmonic_amplitude = torch.repeat_interleave(harmonic_amplitude, hop_length, dim=2)
 
-class GRN(torch.nn.Module):
-    """GRN (Global Response Normalization) layer"""
+    # Generate sinusoids
+    f0 = torch.repeat_interleave(f0, hop_length, dim=2)
+    radious = f0.to(torch.float64) / sample_rate
+    if random_init_phase:
+        radious[..., 0] += torch.rand((1, 1), device=device)
+    radious = torch.cumsum(radious, dim=2)
+    harmonic_phase = 2.0 * torch.pi * radious * indices
+    harmonics = torch.sin(harmonic_phase).to(torch.float32)
 
-    def __init__(self, dim):
-        super().__init__()
-        self.gamma = torch.nn.Parameter(torch.zeros(1, 1, dim))
-        self.beta = torch.nn.Parameter(torch.zeros(1, 1, dim))
+    # Multiply coefficients to the harmonic signal
+    harmonics = harmonic_mask * harmonics
+    harmonics = harmonic_amplitude * torch.sum(harmonics, dim=1, keepdim=True)
 
-    def forward(self, x):
-        Gx = torch.norm(x, p=2, dim=1, keepdim=True)
-        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
-        return self.gamma * (x * Nx) + self.beta + x
+    # vuv = torch.repeat_interleave(vuv, hop_length, dim=2)
+    # noise = noise_amplitude * torch.randn(
+    #     (batch, 1, frames * hop_length), device=device
+    # )
+    # noise = noise * (~vuv)
+    return harmonics  # + noise

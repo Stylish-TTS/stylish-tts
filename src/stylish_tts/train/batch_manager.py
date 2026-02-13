@@ -42,6 +42,9 @@ class BatchManager:
         self.multispeaker: bool = multispeaker
         self.stage: str = stage
         self.hop_length: int = train.model_config.hop_length
+        self.coarse_hop_length: int = (
+            train.model_config.hop_length * train.model_config.coarse_multiplier
+        )
 
         train_list = utils.get_data_path_list(self.train_path)
         if len(train_list) == 0:
@@ -116,6 +119,7 @@ class BatchManager:
                             probe_batch_size=batch_size,
                             stage=train.stage.name,
                             train=train,
+                            hop_length=train.model_config.hop_length,
                         )
                         for _, batch in enumerate(loader):
                             _ = train.stage.train_batch(batch, train, probing=True)
@@ -169,6 +173,7 @@ class BatchManager:
             epoch=train.manifest.current_epoch,
             stage=train.stage.name,
             train=train,
+            hop_length=train.model_config.hop_length,
         )
         train.manifest.steps_per_epoch = train.stage.get_steps_per_epoch()
         self.loader = train.accelerator.prepare(self.loader)
@@ -184,7 +189,7 @@ class BatchManager:
     ) -> Optional[LossLog]:
         result = None
         max_attempts = 3
-        last_bin = get_padded_time_bin(batch[0].shape[-1], self.hop_length)
+        last_bin = get_padded_time_bin(batch[0].shape[-1], self.coarse_hop_length)
         if last_bin == -1 or (last_bin == self.last_oom and self.skip_forward):
             return result
         elif last_bin != self.last_oom:

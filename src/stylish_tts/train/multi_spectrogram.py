@@ -13,9 +13,9 @@ class Resolution:
 resolutions = [
     # Resolution(fft=2048, hop=50, window=67),
     # Resolution(fft=2048, hop=100, window=127),
-    Resolution(fft=512, hop=50, window=240),  # 257),
-    Resolution(fft=1024, hop=120, window=600),  # 509),
-    Resolution(fft=2048, hop=240, window=1200),  # 1021),
+    Resolution(fft=512, hop=128, window=512),  # 257),
+    Resolution(fft=1024, hop=256, window=1024),  # 509),
+    Resolution(fft=2048, hop=512, window=2048),  # 1021),
     # Resolution(fft=2048, hop=100, window=2048),
 ]
 
