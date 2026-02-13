@@ -126,7 +126,21 @@ def train_align(config_path, model_config_path, out, checkpoint, reset_stage):
     type=str,
     help="Model configuration (optional), defaults to known-good model parameters.",
 )
-def align(config_path, model_config_path):
+@click.option(
+    "--method",
+    type=click.Choice(["k2", "torch"], case_sensitive=False),
+    default="k2",
+    help="Method for forced alignment. 'k2' (process multiple samples simultaneously), 'torch' (one sample at a time). Default: k2",
+)
+@click.option(
+    "-bs",
+    "--batch-size",
+    "batch_size",
+    default=8,
+    type=int,
+    help="Number of samples to process simultaneously (only works if method is k2), default to 8.",
+)
+def align(config_path, model_config_path, method, batch_size):
     """Align dataset
 
     <config_path> is your main configuration file. Use an alignment model to precache the alignments for your dataset. <config_path> is your main configuration file and the alignment model will be loaded from <path>/<alignment_model_path>. The alignments are saved to <path>/<alignment_path> as specified in the dataset section. 'scores_val.txt' and 'scores_train.txt' containing confidence scores for each segment will be written to the dataset <path>.
@@ -136,7 +150,52 @@ def align(config_path, model_config_path):
     model_config = get_model_config(model_config_path)
     from stylish_tts.train.dataprep.align_text import align_text
 
-    align_text(config, model_config)
+    align_text(config, model_config, method, batch_size)
+
+
+##### align-textgrid #####
+
+@cli.command(
+    "align-textgrid",
+    short_help="Use a pretrained alignment model to create a cache of alignments for training."
+)
+@click.argument(
+    "audio_path",
+    type=str,
+)
+@click.argument(
+    "text",
+    type=str,
+)
+@click.argument(
+    "config_path",
+    type=str,
+)
+@click.option(
+    "-mc",
+    "--model-config",
+    "model_config_path",
+    default="",
+    type=str,
+    help="Model configuration (optional), defaults to known-good model parameters.",
+)
+@click.option(
+    "--method",
+    type=click.Choice(["k2", "torch"], case_sensitive=False),
+    default="k2",
+    help="Method for forced alignment. 'k2' (process multiple samples simultaneously), 'torch' (one sample at a time). Default: k2",
+)
+def align_textgrid(audio_path, text, config_path, model_config_path, method):
+    """Align single sample and save as .textgrid
+
+    <config_path> is your main configuration file. Use an alignment model to precache the alignments for your dataset. <config_path> is your main configuration file and the alignment model will be loaded from <path>/<alignment_model_path>. The alignments are saved to <path>/<alignment_path> as specified in the dataset section. 'scores_val.txt' and 'scores_train.txt' containing confidence scores for each segment will be written to the dataset <path>.
+    """
+    print("Calculate alignment...")
+    config = get_config(config_path)
+    model_config = get_model_config(model_config_path)
+    from stylish_tts.train.dataprep.align_textgrid import align_textgrid
+
+    align_textgrid(audio_path, text, config, model_config, method)
 
 
 ##### pitch #####

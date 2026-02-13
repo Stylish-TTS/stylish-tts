@@ -55,11 +55,9 @@ def convert_to_onnx(
         .unsqueeze(0)
         .to(device)
     )
-    texts = torch.zeros([1, tokens.shape[1] + 2], dtype=int).to(device)
-    texts[0, 1 : tokens.shape[1] + 1] = tokens
     texts = texts.long()
     text_lengths = torch.zeros([1], dtype=int).to(device)
-    text_lengths[0] = tokens.shape[1] + 2
+    text_lengths[0] = tokens.shape[1]
     text_mask = length_to_mask(text_lengths, text_lengths[0])
     speech_style = torch.rand([1, model_config.style_dim]).to(device)
     pe_style = torch.rand([1, model_config.style_dim]).to(device)

@@ -19,6 +19,7 @@ class TextCleaner:
         # logger.debug(len(dicts))
 
     def __call__(self, text):
+        text = self._pad + text + self._pad
         indexes = []
         for char in text:
             try:

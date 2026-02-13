@@ -2,7 +2,7 @@ import click
 import logging
 import math
 from os import path as osp
-import pathlib
+from pathlib import Path
 import sys
 
 from einops import rearrange
@@ -18,11 +18,18 @@ from stylish_tts.train.models.text_aligner import tdnn_blstm_ctc_model_base
 from stylish_tts.lib.config_loader import load_config_yaml, load_model_config_yaml
 from stylish_tts.lib.text_utils import TextCleaner
 from stylish_tts.train.utils import get_data_path_list, maximum_path
-from stylish_tts.train.dataloader import get_frame_count, get_time_bin
+from stylish_tts.train.dataloader import (
+    get_frame_count,
+    get_time_bin,
+    DynamicBatchSampler,
+    FilePathDataset,
+    Collater,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from stylish_tts.train.utils import calculate_mel
 from stylish_tts.train.train_context import TrainContext
 from stylish_tts.train.batch_manager import BatchManager
+from stylish_tts.train.stage import prepare_batch
 import shutil
 
 logging.basicConfig(
@@ -33,8 +40,57 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def align_text(config, model_config):
-    root = pathlib.Path(config.dataset.path)
+def get_steps(batch_size, time_bins):
+    total = 0
+    for key in time_bins.keys():
+        val = time_bins[key]
+        total += len(val) // batch_size + 1
+    return total
+
+
+def build_dataloader(
+    datalist,
+    text_cleaner,
+    batch_size,
+    collate_config={},
+    *,
+    config,
+    model_config,
+):
+    dataset = FilePathDataset(
+        data_list=datalist,
+        root_path=Path(config.dataset.path) / config.dataset.wav_path,
+        text_cleaner=text_cleaner,
+        model_config=model_config,
+        pitch_path="",
+        alignment_path="",
+        duration_processor=None,
+    )
+
+    collate_fn = Collater(
+        stage="alignment", hop_length=model_config.hop_length, **collate_config
+    )
+    time_bins, _ = dataset.time_bins()
+
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        collate_fn=collate_fn,
+        pin_memory=False,
+        batch_sampler=DynamicBatchSampler(
+            time_bins,
+            shuffle=False,
+            drop_last=False,
+            force_bin=None,
+            force_batch_size=batch_size,
+            train=None,
+        ),
+    )
+    total_steps = get_steps(batch_size, time_bins)
+    return data_loader, total_steps
+
+
+def align_text(config, model_config, method, batch_size):
+    root = Path(config.dataset.path)
 
     out = root / config.dataset.alignment_path
     model = root / config.dataset.alignment_model_path
@@ -71,36 +127,75 @@ def align_text(config, model_config):
     aligner.load_state_dict(aligner_dict)
     aligner = aligner.eval()
 
-    wavdir = root / config.dataset.wav_path
-    vals, scores = calculate_alignments(
-        train,
-        "Val Set",
-        root / config.dataset.val_data,
-        wavdir,
-        aligner,
-        model_config,
-        device,
-    )
-    with open(
-        pathlib.Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8"
-    ) as f:
-        for name in scores.keys():
-            f.write(str(scores[name]) + " " + name + "\n")
-    trains, scores = calculate_alignments(
-        train,
-        "Train Set",
-        root / config.dataset.train_data,
-        wavdir,
-        aligner,
-        model_config,
-        device,
-    )
-    with open(
-        pathlib.Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8"
-    ) as f:
-        for name in scores.keys():
-            f.write(str(scores[name]) + " " + name + "\n")
+    if method == "k2":
+        val_datalist = get_data_path_list(
+            Path(config.dataset.path) / config.dataset.val_data
+        )
+        vals, scores = calculate_alignment_batched(
+            train, "Val Set", val_datalist, batch_size, config, model_config, aligner
+        )
+        with open(
+            Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8"
+        ) as f:
+            for name in scores.keys():
+                f.write(str(scores[name]) + " " + name + "\n")
+
+        train_datalist = get_data_path_list(
+            Path(config.dataset.path) / config.dataset.train_data
+        )
+        trains, scores = calculate_alignment_batched(
+            train,
+            "Train Set",
+            train_datalist,
+            batch_size,
+            config,
+            model_config,
+            aligner,
+        )
+        with open(
+            Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8"
+        ) as f:
+            for name in scores.keys():
+                f.write(str(scores[name]) + " " + name + "\n")
+    elif method == "torch":
+        wavdir = root / config.dataset.wav_path
+        vals, scores = calculate_alignments(
+            train,
+            "Val Set",
+            root / config.dataset.val_data,
+            wavdir,
+            aligner,
+            model_config,
+            device,
+        )
+        with open(
+            Path(config.dataset.path) / "scores_val.txt", "w", encoding="utf-8"
+        ) as f:
+            for name in scores.keys():
+                f.write(str(scores[name]) + " " + name + "\n")
+        trains, scores = calculate_alignments(
+            train,
+            "Train Set",
+            root / config.dataset.train_data,
+            wavdir,
+            aligner,
+            model_config,
+            device,
+        )
+        with open(
+            Path(config.dataset.path) / "scores_train.txt", "w", encoding="utf-8"
+        ) as f:
+            for name in scores.keys():
+                f.write(str(scores[name]) + " " + name + "\n")
+    else:
+        raise NotImplementedError(method)
     result = vals | trains
+    if out.exists():
+        # Fix safetensors_rust.SafetensorError:
+        # Error while serializing: I/O error:
+        # The requested operation cannot be performed on a file with a user-mapped section open.
+        # (os error 1224)
+        out.unlink()
     save_file(result, out)
     # Remove temporary output directoary
     shutil.rmtree(train.out_dir)
@@ -116,6 +211,50 @@ def tqdm_wrapper(iterable, total=None, desc="", color="GREEN"):
         dynamic_ncols=True,
         total=total,
     )
+
+
+@torch.no_grad()
+def calculate_alignment_batched(
+    train: TrainContext, label, datalist, batch_size, config, model_config, aligner
+):
+    alignment_map = {}
+    scores_map = {}
+
+    dataloader, total_steps = build_dataloader(
+        datalist,
+        train.text_cleaner,
+        batch_size,
+        config=config,
+        model_config=model_config,
+    )
+    iterator = tqdm_wrapper(
+        dataloader,
+        total=total_steps,
+        desc="Aligning " + label,
+        color="MAGENTA",
+    )
+    for inputs in iterator:
+        batch = prepare_batch(
+            inputs,
+            train.config.training.device,
+            ["audio_gt", "text", "text_length", "path"],
+        )
+        mels, mel_lengths = calculate_mel(
+            batch.audio_gt,
+            train.to_align_mel,
+            train.normalization.mel_log_mean,
+            train.normalization.mel_log_std,
+        )
+        mels = rearrange(mels, "b f t -> b t f")
+        prediction, _ = aligner(mels, mel_lengths)
+        prediction = rearrange(prediction, "t b k -> b t k")
+        alignments, scores = k2_align(
+            batch.text, mel_lengths, batch.text_length, prediction, train
+        )
+        for name, alignment, score in zip(batch.path, alignments, scores):
+            alignment_map[name] = alignment
+            scores_map[name] = score.exp().item()
+    return alignment_map, scores_map
 
 
 @torch.no_grad()
@@ -149,7 +288,7 @@ def calculate_alignments(
 
 
 def calculate_alignment_single(
-    train: TrainContext, aligner, model_config, name, text_raw, wave, device
+    train: TrainContext, aligner, model_config, name, text, wave, device
 ):
     mels, mel_lengths = calculate_mel(
         torch.from_numpy(wave).float().to(device).unsqueeze(0),
@@ -157,7 +296,7 @@ def calculate_alignment_single(
         train.normalization.mel_log_mean,
         train.normalization.mel_log_std,
     )
-    text = train.text_cleaner("$" + text_raw + "$")
+    text = train.text_cleaner(text)
     text = torch.tensor(text).to(device).unsqueeze(0)
     mels = rearrange(mels, "b f t -> b t f")
     prediction, _ = aligner(mels, mel_lengths)
@@ -263,6 +402,78 @@ def torch_align(mels, text, mel_length, text_length, prediction, model_config, n
     #     left[i] = left_prob / denom
     #     right[i] = right_prob / denom
     # return torch.stack([pred_dur, left, right]), scores
+
+
+def k2_align(text, mel_length, text_length, prediction, train):
+    batch_frame_labels, scores = train.align_loss.forced_align(
+        log_probs=prediction,
+        targets=text,
+        input_lengths=mel_length,
+        target_lengths=text_length,
+    )
+    # k2 forces blank to be 0, 
+    # therefore the prefix, suffix pad tokens are collapsed into first, last tokens, respectfully.
+    # The predicted labels w.r.t audio frames are used to guess the duration of pad tokens.
+    batch_frame_labels_pred = prediction.argmax(dim=-1)
+    durations = []
+    for i, seq_frames in enumerate(batch_frame_labels):
+        total_frames = len(batch_frame_labels_pred[i])
+        token_indices = [idx for idx, label in enumerate(seq_frames) if label > 0]
+        if not token_indices:
+            print("WARNING: no tokens found, likely an untrained model.")
+            durations.append(torch.tensor([total_frames]))
+            continue
+
+        first_idx = token_indices[0]
+        last_idx = token_indices[-1]
+
+        # The index of the first token is exactly the number of silence frames before it.
+        prefix_dur = first_idx
+        token_durs = []
+
+        # Process from first token up to (but not including) the last token
+        current_dur = 0
+
+        # Slice stops before last_idx to handle the last token specially
+        for label in seq_frames[first_idx:last_idx]:
+            if label > 0:
+                if current_dur > 0:
+                    token_durs.append(current_dur)
+                current_dur = 1  # Reset for new token
+            else:
+                current_dur += 1  # Add silence to current token
+
+        # Append the duration of the token immediately preceding the last token
+        if current_dur > 0 and len(token_indices) > 1:
+            token_durs.append(current_dur)
+
+        # Look at argmax starting from the last token's position
+        last_token_activity = batch_frame_labels_pred[i, last_idx:]
+
+        # Find first silence (0) in the argmax after the token starts
+        silence_starts = (last_token_activity == 0).nonzero()
+
+        if silence_starts.numel() > 0:
+            last_token_dur = silence_starts[0].item()
+            last_token_dur = max(1, last_token_dur)  # Ensure it has at least 1 frame
+        else:
+            # Token goes all the way to the end of the audio
+            last_token_dur = len(last_token_activity)
+        token_durs.append(last_token_dur)
+
+        # Calculate where the speech actually ended
+        speech_end_index = last_idx + last_token_dur
+
+        # Remaining frames are the suffix
+        suffix_dur = total_frames - speech_end_index
+
+        # Clamp to 0 just in case of index misalignment (though rare)
+        suffix_dur = max(0, suffix_dur)
+
+        # Combine: [Prefix, tokens..., Suffix]
+        full_durs = [prefix_dur] + token_durs + [suffix_dur]
+        durations.append(torch.tensor(full_durs).unsqueeze(0))
+    return durations, scores
 
 
 def teytaut_align(mels, text, mel_length, text_length, prediction):
