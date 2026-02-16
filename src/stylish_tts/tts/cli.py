@@ -8,8 +8,6 @@ import pyloudnorm as pyln
 # TODO: Remove torch/safetensors dependency
 import torch
 from safetensors import safe_open
-from sentence_transformers import SentenceTransformer
-from sklearn.neighbors import NearestNeighbors
 
 
 @click.group("stylish-tts")
@@ -34,20 +32,29 @@ def cli():
 def speak_document(model, voicepack, infile, outfile, lang):
     if lang != "phonemes":
         exit("Only phoneme input supported for now")
+    dynamic = False
     with safe_open(voicepack, framework="pt", device="cpu") as f:
-        if "voicepack" in f.keys():
-            voicepack = f.get_tensor("voicepack").detach().cpu().numpy()
+        if "voicepack_dynamic" in f.keys():
+            voicepack = f.get_tensor("voicepack_dynamic").detach().cpu().numpy()
+            dynamic = True
+        elif "voicepack_static" in f.keys():
+            voicepack = f.get_tensor("voicepack_static").detach().cpu().numpy()
+            dynamic = False
         else:
             exit(f"Could not find voicepack key in {voicepack}")
 
     speech_pack = voicepack[:, :64]
     pe_pack = voicepack[:, 64:128]
     duration_pack = voicepack[:, 128:192]
-    sbert_pack = voicepack[:, 192:]
 
-    sbert = SentenceTransformer("stsb-mpnet-base-v2")
-    matcher = NearestNeighbors(n_neighbors=8, algorithm="ball_tree")
-    matcher.fit(sbert_pack)
+    if dynamic:
+        from sentence_transformers import SentenceTransformer
+        from sklearn.neighbors import NearestNeighbors
+
+        sbert_pack = voicepack[:, 192:]
+        sbert = SentenceTransformer("stsb-mpnet-base-v2")
+        matcher = NearestNeighbors(n_neighbors=8, algorithm="ball_tree")
+        matcher.fit(sbert_pack)
 
     model = StylishModel(model)
     meter = pyln.Meter(model.sample_rate())  # create BS.1770 meter
@@ -57,23 +64,21 @@ def speak_document(model, voicepack, infile, outfile, lang):
             fields = line.strip().split("|")
             tokens = model.tokenize(fields[0])
             plaintext = fields[1]
-            embedding = sbert.encode([plaintext])
+            if dynamic:
+                embedding = sbert.encode([plaintext])
 
-            distances, indices = matcher.kneighbors(embedding, return_distance=True)
-            distances = 1 / distances
-            distances = distances / distances.sum(axis=1)
-            distances = np.expand_dims(distances, 2).astype(np.float32)
-            speech_style = (speech_pack[indices] * distances).sum(axis=1)
-            pe_style = pe_pack[indices].mean(axis=1)
-            duration_style = duration_pack[indices].mean(axis=1)
-
-            # voice_index = max(511, min(2, len(tokens)))
-            # s_style, pe_style, d_style = torch.chunk(
-            #     voicepack[voice_index], chunks=3, dim=0
-            # )
-            # s_style = s_style.unsqueeze(0).detach().cpu().numpy()
-            # pe_style = pe_style.unsqueeze(0).detach().cpu().numpy()
-            # d_style = d_style.unsqueeze(0).detach().cpu().numpy()
+                distances, indices = matcher.kneighbors(embedding, return_distance=True)
+                distances = 1 / distances
+                distances = distances / distances.sum(axis=1)
+                distances = np.expand_dims(distances, 2).astype(np.float32)
+                speech_style = (speech_pack[indices] * distances).sum(axis=1)
+                pe_style = pe_pack[indices].mean(axis=1)
+                duration_style = duration_pack[indices].mean(axis=1)
+            else:
+                voice_index = max(511, min(2, len(tokens)))
+                speech_style = np.expand_dims(speech_pack[voice_index], axis=0)
+                pe_style = np.expand_dims(pe_pack[voice_index], axis=0)
+                duration_style = np.expand_dims(duration_pack[voice_index], axis=0)
             audio = model.generate_speech(
                 tokens, [speech_style, pe_style, duration_style]
             )

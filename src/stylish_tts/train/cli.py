@@ -155,9 +155,10 @@ def align(config_path, model_config_path, method, batch_size):
 
 ##### align-textgrid #####
 
+
 @cli.command(
     "align-textgrid",
-    short_help="Use a pretrained alignment model to create a cache of alignments for training."
+    short_help="Use a pretrained alignment model to create a cache of alignments for training.",
 )
 @click.argument(
     "audio_path",
@@ -385,6 +386,11 @@ def convert(config_path, model_config_path, speech, checkpoint):
     type=str,
 )
 @click.option(
+    "--dynamic",
+    is_flag=True,
+    help="Create a dynamic voicepack (default is static)",
+)
+@click.option(
     "-mc",
     "--model-config",
     "model_config_path",
@@ -392,159 +398,31 @@ def convert(config_path, model_config_path, speech, checkpoint):
     type=str,
     help="Model configuration (optional), defaults to known-good model parameters.",
 )
-@click.option("--voicepack", required=True, type=str, help="Path to write voice pack")
+@click.option(
+    "--voicepack",
+    "voicepack_path",
+    required=True,
+    type=str,
+    help="Path to write voice pack",
+)
 @click.option(
     "--checkpoint",
     required=True,
     type=str,
     help="Path to a model checkpoint to load for conversion",
 )
-def voicepack(config_path, model_config_path, voicepack, checkpoint):
-    from pathlib import Path
-    from sentence_transformers import SentenceTransformer
-    import torch
-    import torchaudio
-    import tqdm
+def voicepack(config_path, dynamic, model_config_path, voicepack_path, checkpoint):
     from safetensors.torch import save_file
-    from stylish_tts.train.cli_util import Checkpoint
-    from stylish_tts.train.dataloader import build_dataloader, FilePathDataset
-    from stylish_tts.lib.text_utils import TextCleaner
-    from stylish_tts.train.utils import get_data_path_list, calculate_mel, log_norm
+    from stylish_tts.train.voicepack import make_voicepack
 
-    print("Generate voicepack...")
+    if dynamic:
+        print("Generate dynamic voicepack...")
+    else:
+        print("Generate static voicepack...")
     config = get_config(config_path)
     model_config = get_model_config(model_config_path)
-    device = config.training.device
-    state = Checkpoint(checkpoint, config, model_config)
-    if state.norm.frames <= 0:
-        exit("No normalization state found. Cannot generate voicepack.")
-    sbert = SentenceTransformer("stsb-mpnet-base-v2")
-
-    to_mel = torchaudio.transforms.MelSpectrogram(
-        n_mels=model_config.n_mels,
-        n_fft=model_config.n_fft,
-        win_length=model_config.win_length,
-        hop_length=model_config.hop_length,
-        sample_rate=model_config.sample_rate,
-    ).to(config.training.device)
-
-    to_style_mel = torchaudio.transforms.MelSpectrogram(
-        n_mels=model_config.style_encoder.n_mels,
-        n_fft=model_config.style_encoder.n_fft,
-        win_length=model_config.style_encoder.win_length,
-        hop_length=model_config.style_encoder.hop_length,
-        sample_rate=model_config.sample_rate,
-    ).to(config.training.device)
-    text_cleaner = TextCleaner(model_config.symbol)
-
-    datalist = get_data_path_list(Path(config.dataset.path) / config.dataset.train_data)
-
-    paths = []
-    plaintexts = []
-    for line in datalist:
-        fields = line.strip().split("|")
-        paths.append(fields[0])
-        plaintexts.append(fields[3])
-    sbert_embeddings = sbert.encode(plaintexts)
-
-    path_to_embedding = {}
-    for i in range(len(paths)):
-        path_to_embedding[paths[i]] = sbert_embeddings[i]
-
-    dataset = FilePathDataset(
-        data_list=datalist,
-        root_path=Path(config.dataset.path) / config.dataset.wav_path,
-        text_cleaner=text_cleaner,
-        model_config=model_config,
-        pitch_path=Path(config.dataset.path) / config.dataset.pitch_path,
-        alignment_path=Path(config.dataset.path) / config.dataset.alignment_path,
-        duration_processor=state.duration_processor,
-    )
-
-    time_bins, _ = dataset.time_bins()
-    dataloader = build_dataloader(
-        dataset,
-        time_bins,
-        validation=True,
-        num_workers=0,
-        device=config.training.device,
-        multispeaker=model_config.multispeaker,
-        stage="voicepack",
-        train=None,
-        hop_length=model_config.hop_length,
-    )
-
-    iterator = tqdm.tqdm(
-        iterable=enumerate(dataloader),
-        desc="Generating styles",
-        total=len(datalist),
-        unit="steps",
-        initial=0,
-        colour="GREEN",
-        leave=False,
-        dynamic_ncols=True,
-    )
-    state.model.speech_style_encoder.eval()
-    state.model.pe_style_encoder.eval()
-    state.model.duration_style_encoder.eval()
-    styles = []
-    # styles = [[] for _ in range(512)]
-    for _, batch in iterator:
-        with torch.no_grad():
-            path = batch[3][0]
-            wave = batch[0].to(device)
-            pitch = batch[4].to(device)
-            length = batch[2][0].to(device)
-            energy_mel, _ = calculate_mel(
-                wave,
-                to_mel,
-                state.norm.mel_log_mean,
-                state.norm.mel_log_std,
-            )
-            energy = log_norm(
-                energy_mel.unsqueeze(1),
-                state.norm.mel_log_mean,
-                state.norm.mel_log_std,
-            ).squeeze(1)
-            energy = torch.log(energy + 1e-9)
-            style_mel, _ = calculate_mel(
-                wave, to_style_mel, state.norm.mel_log_mean, state.norm.mel_log_std
-            )
-            speech_style = state.model.speech_style_encoder(style_mel.unsqueeze(1))
-            pe_style = state.model.pe_style_encoder(style_mel, pitch, energy)
-            duration_style = state.model.duration_style_encoder(style_mel.unsqueeze(1))
-
-            embedding = torch.from_numpy(path_to_embedding[path]).to(device)
-            combined = torch.cat(
-                [
-                    speech_style.squeeze(0),
-                    pe_style.squeeze(0),
-                    duration_style.squeeze(0),
-                    embedding,
-                ],
-                dim=0,
-            )
-            styles.append(combined)
-            # styles[length.item() - 1].append(combined)
-
-    # result = []
-    # for i in range(512):
-    #     lower = i
-    #     upper = i + 1
-    #     while total_len(styles[lower:upper]) < 100:
-    #         lower -= 1
-    #         upper += 1
-    #         if lower < 0 and upper > 512:
-    #             exit("Need at least 100 styles to make a voicepack")
-    #     flattened = sum(styles[lower:upper], [])
-    #     average = torch.stack(flattened, dim=0).mean(dim=0)
-    #     result.append(average)
-    result = torch.stack(styles, dim=0)
-    save_file({"voicepack": result}, voicepack)
-
-
-def total_len(listlist):
-    result = 0
-    for item in listlist:
-        result += len(item)
-    return result
+    result = make_voicepack(config, model_config, dynamic, checkpoint)
+    key = "voicepack_static"
+    if dynamic:
+        key = "voicepack_dynamic"
+    save_file({key: result}, voicepack_path)
