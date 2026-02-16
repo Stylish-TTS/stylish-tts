@@ -1,4 +1,3 @@
-import math
 import torch
 from .text_encoder import TextEncoder
 from .prosody_encoder import ProsodyEncoder

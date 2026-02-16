@@ -1,103 +1,59 @@
 import math
 from typing import List, Optional, Tuple
 import torch
-from torch import nn
-from torch.nn import functional as F
-from torchaudio.transforms import Spectrogram
 from torch.nn.utils.parametrizations import weight_norm
 from einops import rearrange
 
 
-LRELU_SLOPE = 0.1
-
-
-def stft(x, fft_size, hop_size, win_length, window):
-    """Perform STFT and convert to magnitude spectrogram.
-    Args:
-        x (Tensor): Input signal tensor (B, T).
-        fft_size (int): FFT size.
-        hop_size (int): Hop size.
-        win_length (int): Window length.
-        window (str): Window function type.
-    Returns:
-        Tensor: Magnitude spectrogram (B, #frames, fft_size // 2 + 1).
-    """
-    x_stft = torch.stft(x, fft_size, hop_size, win_length, window, return_complex=True)
-    real = x_stft[..., 0]
-    imag = x_stft[..., 1]
-
-    return torch.abs(x_stft).transpose(2, 1)
-
-
-class SpecDiscriminator(nn.Module):
+class SpecDiscriminator(torch.nn.Module):
     """docstring for Discriminator."""
 
     def __init__(
         self,
-        use_spectral_norm=False,
     ):
         super(SpecDiscriminator, self).__init__()
-        norm_f = weight_norm if use_spectral_norm == False else spectral_norm
-        self.discriminators = nn.ModuleList(
+        norm_f = weight_norm
+        self.discriminators = torch.nn.ModuleList(
             [
-                norm_f(nn.Conv2d(1, 32, kernel_size=(3, 9), padding=(1, 4))),
+                norm_f(torch.nn.Conv2d(1, 32, kernel_size=(3, 9), padding=(1, 4))),
                 norm_f(
-                    nn.Conv2d(32, 32, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4))
+                    torch.nn.Conv2d(
+                        32, 32, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4)
+                    )
                 ),
                 norm_f(
-                    nn.Conv2d(32, 32, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4))
+                    torch.nn.Conv2d(
+                        32, 32, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4)
+                    )
                 ),
                 norm_f(
-                    nn.Conv2d(32, 32, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4))
+                    torch.nn.Conv2d(
+                        32, 32, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4)
+                    )
                 ),
                 norm_f(
-                    nn.Conv2d(32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                    torch.nn.Conv2d(
+                        32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)
+                    )
                 ),
             ]
         )
+        self.relu = torch.nn.LeakyReLU(0.1)
 
-        self.out = norm_f(nn.Conv2d(32, 1, 3, 1, 1))
+        self.out = norm_f(torch.nn.Conv2d(32, 1, 3, 1, 1))
 
     def forward(self, y):
 
         fmap = []
         for i, d in enumerate(self.discriminators):
             y = d(y)
-            y = F.leaky_relu(y, LRELU_SLOPE)
+            y = self.relu(y)
             fmap.append(y)
 
         y = self.out(y)
         fmap.append(y)
 
         return torch.flatten(y, 1, -1), fmap
-
-
-class MultiResolutionDiscriminator(torch.nn.Module):
-
-    def __init__(
-        self,
-        discriminator_count,
-    ):
-
-        super(MultiResolutionDiscriminator, self).__init__()
-        self.discriminators = nn.ModuleList(
-            [SpecDiscriminator() for _ in range(discriminator_count)]
-        )
-
-    def forward(self, *, target_list, pred_list):
-        y_d_rs = []
-        y_d_gs = []
-        fmap_rs = []
-        fmap_gs = []
-        for target, pred, disc in zip(target_list, pred_list, self.discriminators):
-            y_d_r, fmap_r = disc(target)
-            y_d_g, fmap_g = disc(pred)
-            y_d_rs.append(y_d_r)
-            fmap_rs.append(fmap_r)
-            y_d_gs.append(y_d_g)
-            fmap_gs.append(fmap_g)
-
-        return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
 
 def run_discriminator_model(disc, target, pred):
@@ -119,7 +75,7 @@ def run_discriminator_model(disc, target, pred):
 #################################################
 
 
-class WindowwiseTransformer(nn.Module):
+class WindowwiseTransformer(torch.nn.Module):
     """Process entire window using transformer architecture with sinusoidal position encodings.
     Allows cross-frame attention within the window while maintaining position-awareness.
     """
@@ -134,7 +90,7 @@ class WindowwiseTransformer(nn.Module):
         num_transformer_heads=8,
     ):
         super().__init__()
-        self.input_projection = nn.Linear(input_dim, context_dim)
+        self.input_projection = torch.nn.Linear(input_dim, context_dim)
 
         # Generate fixed sinusoidal position encodings
         self.register_buffer(
@@ -142,10 +98,10 @@ class WindowwiseTransformer(nn.Module):
             self._create_sinusoidal_encoding(frames_per_window, context_dim),
         )
 
-        self.dropout = nn.Dropout(context_dropout)
-        self.layers = nn.ModuleList(
+        self.dropout = torch.nn.Dropout(context_dropout)
+        self.layers = torch.nn.ModuleList(
             [
-                nn.TransformerEncoderLayer(
+                torch.nn.TransformerEncoderLayer(
                     d_model=context_dim,
                     nhead=num_transformer_heads,
                     dropout=context_dropout,
@@ -156,10 +112,10 @@ class WindowwiseTransformer(nn.Module):
                 for _ in range(num_context_layers)
             ]
         )
-        self.norm = nn.LayerNorm(context_dim)
+        self.norm = torch.nn.LayerNorm(context_dim)
 
         # Initialize a scale factor for position encodings
-        self.pos_encoding_scale = nn.Parameter(torch.ones(1))
+        self.pos_encoding_scale = torch.nn.Parameter(torch.ones(1))
 
     def _create_sinusoidal_encoding(self, max_len, d_model):
         """Create sinusoidal position encodings.
@@ -222,23 +178,23 @@ class WindowwiseTransformer(nn.Module):
 
     def reset_parameters(self):
         """Reset learnable parameters while keeping position encodings fixed."""
-        nn.init.normal_(self.pos_encoding_scale, mean=1.0, std=0.1)
+        torch.nn.init.normal_(self.pos_encoding_scale, mean=1.0, std=0.1)
 
         # Reset input projection
-        nn.init.xavier_uniform_(self.input_projection.weight)
+        torch.nn.init.xavier_uniform_(self.input_projection.weight)
         if self.input_projection.bias is not None:
-            nn.init.zeros_(self.input_projection.bias)
+            torch.nn.init.zeros_(self.input_projection.bias)
 
         # Reset transformer layers
         for layer in self.layers:
             for name, param in layer.named_parameters():
                 if "weight" in name:
-                    nn.init.xavier_uniform_(param)
+                    torch.nn.init.xavier_uniform_(param)
                 elif "bias" in name:
-                    nn.init.zeros_(param)
+                    torch.nn.init.zeros_(param)
 
 
-class ContextFreeEmbedding(nn.Module):
+class ContextFreeEmbedding(torch.nn.Module):
     def __init__(
         self,
         input_wav_length=None,
@@ -327,14 +283,16 @@ class ContextFreeEmbedding(nn.Module):
         assert window_layers_dim <= last_cnn_output_dim
 
         # Feature Extractor - Fine-tuned for 8-10 frames per window, 20ms temporal resolution
-        self.feature_extractor = nn.Sequential(
+        self.feature_extractor = torch.nn.Sequential(
             # Layer 1: Stride of 4
-            nn.Conv1d(1, n_channels, kernel_size=11, stride=4, padding=5, bias=bias),
-            nn.BatchNorm1d(n_channels),
-            nn.GELU(),
-            nn.Dropout(cnn_dropout_rate),
+            torch.nn.Conv1d(
+                1, n_channels, kernel_size=11, stride=4, padding=5, bias=bias
+            ),
+            torch.nn.BatchNorm1d(n_channels),
+            torch.nn.GELU(),
+            torch.nn.Dropout(cnn_dropout_rate),
             # Layer 2: Stride of 4
-            nn.Conv1d(
+            torch.nn.Conv1d(
                 n_channels,
                 n_channels * 2,
                 kernel_size=11,
@@ -342,11 +300,11 @@ class ContextFreeEmbedding(nn.Module):
                 padding=5,
                 bias=bias,
             ),
-            nn.BatchNorm1d(n_channels * 2),
-            nn.GELU(),
-            nn.Dropout(cnn_dropout_rate),
+            torch.nn.BatchNorm1d(n_channels * 2),
+            torch.nn.GELU(),
+            torch.nn.Dropout(cnn_dropout_rate),
             # Layer 3: Stride of 2
-            nn.Conv1d(
+            torch.nn.Conv1d(
                 n_channels * 2,
                 n_channels * 4,
                 kernel_size=7,
@@ -354,11 +312,11 @@ class ContextFreeEmbedding(nn.Module):
                 padding=3,
                 bias=bias,
             ),
-            nn.BatchNorm1d(n_channels * 4),
-            nn.GELU(),
-            nn.Dropout(cnn_dropout_rate),
+            torch.nn.BatchNorm1d(n_channels * 4),
+            torch.nn.GELU(),
+            torch.nn.Dropout(cnn_dropout_rate),
             # Layer 4: Stride of 2
-            nn.Conv1d(
+            torch.nn.Conv1d(
                 n_channels * 4,
                 last_cnn_output_dim,
                 kernel_size=5,
@@ -366,22 +324,22 @@ class ContextFreeEmbedding(nn.Module):
                 padding=2,
                 bias=bias,
             ),
-            nn.BatchNorm1d(last_cnn_output_dim),
-            nn.GELU(),
-            nn.Dropout(cnn_dropout_rate),
+            torch.nn.BatchNorm1d(last_cnn_output_dim),
+            torch.nn.GELU(),
+            torch.nn.Dropout(cnn_dropout_rate),
         )
 
         # Frequency attention mechanism (unchanged)
-        self.freq_attention = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
-            nn.Conv1d(last_cnn_output_dim, last_cnn_output_dim, 1, bias=True),
-            nn.Sigmoid(),
+        self.freq_attention = torch.nn.Sequential(
+            torch.nn.AdaptiveAvgPool1d(1),
+            torch.nn.Conv1d(last_cnn_output_dim, last_cnn_output_dim, 1, bias=True),
+            torch.nn.Sigmoid(),
         )
 
         # Temporal stream - Modified for 20ms temporal field
-        self.temporal_stream = nn.Sequential(
+        self.temporal_stream = torch.nn.Sequential(
             # Broad temporal context (reduced kernel size due to halved temporal resolution)
-            nn.Conv1d(
+            torch.nn.Conv1d(
                 last_cnn_output_dim,
                 last_cnn_output_dim,
                 kernel_size=7,
@@ -390,10 +348,10 @@ class ContextFreeEmbedding(nn.Module):
                 groups=8,
                 bias=True,
             ),
-            nn.BatchNorm1d(last_cnn_output_dim),
-            nn.GELU(),
+            torch.nn.BatchNorm1d(last_cnn_output_dim),
+            torch.nn.GELU(),
             # Fine detail processing (reduced kernel size due to halved temporal resolution)
-            nn.Conv1d(
+            torch.nn.Conv1d(
                 last_cnn_output_dim,
                 last_cnn_output_dim,
                 kernel_size=3,
@@ -405,8 +363,8 @@ class ContextFreeEmbedding(nn.Module):
         )
 
         # Spectral stream (unchanged)
-        self.spectral_stream = nn.Sequential(
-            nn.Conv1d(
+        self.spectral_stream = torch.nn.Sequential(
+            torch.nn.Conv1d(
                 last_cnn_output_dim,
                 n_channels * 12,
                 kernel_size=1,
@@ -415,9 +373,9 @@ class ContextFreeEmbedding(nn.Module):
                 groups=8,
                 bias=True,
             ),
-            nn.BatchNorm1d(n_channels * 12),
-            nn.GELU(),
-            nn.Conv1d(
+            torch.nn.BatchNorm1d(n_channels * 12),
+            torch.nn.GELU(),
+            torch.nn.Conv1d(
                 n_channels * 12,
                 last_cnn_output_dim,
                 kernel_size=1,
@@ -426,16 +384,16 @@ class ContextFreeEmbedding(nn.Module):
                 groups=8,
                 bias=True,
             ),
-            nn.BatchNorm1d(last_cnn_output_dim),
-            nn.GELU(),
+            torch.nn.BatchNorm1d(last_cnn_output_dim),
+            torch.nn.GELU(),
         )
 
         # Feature fusion (unchanged)
-        self.fusion = nn.Sequential(
-            nn.Conv1d(last_cnn_output_dim * 2, last_cnn_output_dim, 1, bias=True),
-            nn.BatchNorm1d(last_cnn_output_dim),
-            nn.GELU(),
-            nn.Dropout(0.1),
+        self.fusion = torch.nn.Sequential(
+            torch.nn.Conv1d(last_cnn_output_dim * 2, last_cnn_output_dim, 1, bias=True),
+            torch.nn.BatchNorm1d(last_cnn_output_dim),
+            torch.nn.GELU(),
+            torch.nn.Dropout(0.1),
         )
 
         assert last_cnn_output_dim == window_layers_dim * 2
@@ -456,11 +414,11 @@ class ContextFreeEmbedding(nn.Module):
         )
 
         # Final classifier (added Relu and dropout)
-        self.classifier = nn.Sequential(
-            nn.Linear(window_layers_dim, window_layers_dim * 4),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(window_layers_dim * 4, 1),
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Linear(window_layers_dim, window_layers_dim * 4),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(window_layers_dim * 4, 1),
         )
 
     # def update_frames_per_window(self, input_wav_length):
@@ -558,7 +516,7 @@ def slice_windows(
     return windows
 
 
-class ContextFreeDiscriminator(nn.Module):
+class ContextFreeDiscriminator(torch.nn.Module):
 
     def __init__(
         self,
