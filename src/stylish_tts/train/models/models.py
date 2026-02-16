@@ -42,7 +42,6 @@ def build_model(model_config: ModelConfig):
     pitch_energy_predictor = PitchEnergyPredictor(
         style_dim=model_config.style_dim,
         inter_dim=model_config.pitch_energy_predictor.inter_dim,
-        coarse_multiplier=model_config.coarse_multiplier,
         text_config=model_config.text_encoder,
         duration_config=model_config.duration_predictor,
         pitch_energy_config=model_config.pitch_energy_predictor,
