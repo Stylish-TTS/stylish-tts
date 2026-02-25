@@ -55,7 +55,7 @@ def convert_to_onnx(
         .unsqueeze(0)
         .to(device)
     )
-    texts = texts.long()
+    texts = tokens.long()
     text_lengths = torch.zeros([1], dtype=int).to(device)
     text_lengths[0] = tokens.shape[1]
     text_mask = length_to_mask(text_lengths, text_lengths[0])

@@ -4,9 +4,9 @@ from stylish_tts.lib.config_loader import ModelConfig
 from .text_aligner import tdnn_blstm_ctc_model_base
 
 from .discriminator import (
-    MultiResolutionDiscriminator,
     SpecDiscriminator,
     ContextFreeDiscriminator,
+    MultiPeriodDiscriminator,
 )
 
 from .duration_predictor import DurationPredictor
