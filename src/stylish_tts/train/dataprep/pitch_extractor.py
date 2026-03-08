@@ -10,7 +10,6 @@ import librosa
 
 from safetensors.torch import save_file
 from stylish_tts.train.dataprep.align_text import audio_list, tqdm_wrapper
-import pyworld
 import tqdm
 from stylish_tts.train.dataloader import get_frame_count, get_time_bin
 from safetensors.torch import save_file
@@ -66,7 +65,7 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
         total_segments = sum(1 for _ in f)
 
     max_queue_size = workers * 2
-    
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {}
         iterator = tqdm_wrapper(
@@ -75,16 +74,15 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
             desc="Pitch " + label,
             color="GREEN",
         )
-        
+
         result = {}
-        
+
         for name, text_raw, wave in iterator:
             while len(future_map) >= max_queue_size:
                 done, _ = concurrent.futures.wait(
-                    future_map.keys(), 
-                    return_when=concurrent.futures.FIRST_COMPLETED
+                    future_map.keys(), return_when=concurrent.futures.FIRST_COMPLETED
                 )
-                
+
                 for future in done:
                     if future in future_map:
                         name_done = future_map.pop(future)
@@ -119,6 +117,8 @@ def calculate_pitch_set(label, method, path, wavdir, model_config, workers, devi
 def calculate_pitch_pyworld(
     name, text_raw, wave, sample_rate, hop_length, model, device
 ):
+    import pyworld
+
     bad_f0 = 5
     zero_value = -10
     frame_period = hop_length / sample_rate * 1000

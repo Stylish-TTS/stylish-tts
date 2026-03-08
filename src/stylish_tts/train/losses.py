@@ -7,7 +7,7 @@ import torchaudio
 from transformers import AutoModel
 import numpy as np
 
-# import k2
+import k2
 from einops import rearrange
 from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
 from stylish_tts.train.models.discriminator import run_discriminator_model
