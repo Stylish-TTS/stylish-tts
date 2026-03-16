@@ -604,10 +604,9 @@ class CTCLossWithLabelPriors(nn.Module):
         )
 
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
-        tot_scores = best_paths.get_tot_scores(
-            log_semiring=True, use_double_scores=True
-        )
-        scores = tot_scores / target_lengths.to(tot_scores.device)
+        frame_scores = best_paths.scores[(best_paths.labels != -1)]
+        frame_scores = frame_scores.split(input_lengths.tolist())
+        scores = torch.stack([p.mean() for p in frame_scores])
 
         batch_arc_shape = best_paths.arcs.shape().remove_axis(1)
         batch_frame_labels = k2.RaggedTensor(
