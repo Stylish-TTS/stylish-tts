@@ -30,6 +30,7 @@ import tqdm
 import os.path as osp
 import os
 import json
+import platform
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +86,13 @@ def train_model(
     convert = False
     np.random.seed(1)
     random.seed(1)
+    uname = platform.uname()
+    if config.training.device == "cuda" and (
+        uname.system.lower() == "windows" or "wsl" in uname.release.lower()
+    ):
+        # HACK: Force PyTorch to only use dedicated VRAM and ignore shared VRAM on Windows
+        # https://github.com/microsoft/WSL/issues/11050#issuecomment-2003124905
+        torch.cuda.set_per_process_memory_fraction(1.0, 0)
 
     train_logger = logging.getLogger(__name__)
 
