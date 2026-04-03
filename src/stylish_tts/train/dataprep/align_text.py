@@ -62,7 +62,7 @@ def build_dataloader(
         root_path=Path(config.dataset.path) / config.dataset.wav_path,
         text_cleaner=text_cleaner,
         model_config=model_config,
-        pitch_path="",
+        pitch_path=Path(config.dataset.path) / config.dataset.pitch_path,
         alignment_path="",
         duration_processor=None,
     )
@@ -411,7 +411,7 @@ def k2_align(text, mel_length, text_length, prediction, train):
         input_lengths=mel_length,
         target_lengths=text_length,
     )
-    # k2 forces blank to be 0, 
+    # k2 forces blank to be 0,
     # therefore the prefix, suffix pad tokens are collapsed into first, last tokens, respectfully.
     # The predicted labels w.r.t audio frames are used to guess the duration of pad tokens.
     batch_frame_labels_pred = prediction.argmax(dim=-1)

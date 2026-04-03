@@ -1,6 +1,11 @@
 
 # Stylish TTS (Text-To-Speech) System For Model Training
-<!-- <img src="https://img.icons8.com/?size=512&id=i46MwMdULdEi&format=png" alt="Alt text" width="100"> -->
+<a target="_blank" href="https://colab.research.google.com/github/Stylish-TTS/stylish-tts/blob/main/notebook/train-stylish.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+<a target="_blank" href="https://kaggle.com/kernels/welcome?src=https://github.com/Stylish-TTS/stylish-tts/blob/main/notebook/train-stylish.ipynb">
+  <img src="https://kaggle.com/static/images/open-in-kaggle.svg" alt="Open In Kaggle"/>
+</a>
 
 # Quick Links:
 1. [What is Stylish TTS?](#1-what-is-stylish-tts)
@@ -42,15 +47,19 @@ TBD: More dependencies as we flesh out inference
 
 ### 2.2 Training:
 
-Instructions are provided for both `uv` or `pip`. Install your preferred Python package manager and refer to the associated instructions.
+If you are using a notebook-based environment (e.g., Colab or Kaggle), launch the training notebook via:
 
-You will need to install `k2` during the installation process. This is a bit trickier than other dependencies:
-- Installing `k2` requires you to find the correct wheel from their installation page to install. Refer to thair [installation instructions](https://k2-fsa.github.io/k2/installation/index.html)
-- `k2` includes PyTorch version, Python version, CUDA version (for non-CPU installs), and OS as part of their URL. Make sure you pick the right one.
-- Use the proper wheel URL below where you see `<K2_URL>`
-- Make sure your `<K2_URL>` is not itself escaped (you should see a '+' in it instead of '%2B').
-- If you are using a non-cuda GPU, install the CPU variant of `k2` and during alignment training (the only place using k2), it will automatically fall back on the CPU device. Alignment training is reasonably fast even on CPU.
-- If you run into issues after installing, try removing `k2`, verifying that all the various versions are expected, then re-installing using the correct wheel.
+<a target="_blank" href="https://colab.research.google.com/github/Stylish-TTS/stylish-tts/blob/main/notebook/train-stylish.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+<a target="_blank" href="https://kaggle.com/kernels/welcome?src=https://github.com/Stylish-TTS/stylish-tts/blob/main/notebook/train-stylish.ipynb">
+  <img src="https://kaggle.com/static/images/open-in-kaggle.svg" alt="Open In Kaggle"/>
+</a>
+
+Direct notebook link: 
+[train-stylish.ipynb](https://github.com/Stylish-TTS/stylish-tts/blob/main/notebook/train-stylish.ipynb)
+
+Instructions are provided for both `uv` or `pip`. Install your preferred Python package manager and refer to the associated instructions.
 
 <details>
 	<summary>📘 <b>Installation via uv</b></summary>
@@ -63,24 +72,22 @@ cd my-training-dir
 # stylish-tts currently uses Python 3.12
 uv init --python 3.12
 
+# Clone the stylish-tts source somewhere (TODO: Fix this when we upload a package)
+git clone https://github.com/Stylish-TTS/stylish-tts.git
+
 # Install pytorch and onnx.
 # Use onnxruntime-gpu if you want to do test inference with a GPU.
-uv add torch torchaudio onnxruntime
+uv add torch torchaudio onnxruntime requests beautifulsoup4
 
-# Install k2. Remember to use the <K2_URL> you found above via the k2 installation instructions
-uv add "k2 @ <K2_URL>"
-
-# Sync packages and verify that things work
-uv sync
+# Auto-detect OS, Python, and PyTorch versions to fetch and install the compatible k2 wheel.
+uv run stylish-tts/get_k2_whl.py > k2_whl.txt && uv add -r k2_whl.txt
 
 # Verify that k2 was installed successfully
 uv run python -c "import k2; print('k2 installed successfully')"
 
-# Clone the stylish-tts source somewhere (TODO: Fix this when we upload a package)
-git clone https://github.com/Stylish-TTS/stylish-tts.git
-
 # Install stylish-tts as a local editable package
 # Automatically rebuilds if contents change
+# IMPORTANT: Don't forget the trailing slash /
 uv add --editable stylish-tts/
 ```
 
@@ -105,20 +112,18 @@ python3.12 -m venv venv
 # Activate virtual environment (needs to be done every time you begin a new session)
 source venv/bin/activate
 
+# Clone the stylish-tts source somewhere (TODO: Fix this when we upload a package)
+git clone https://github.com/Stylish-TTS/stylish-tts.git
+
 # Install pytorch and onnx.
 # Use onnxruntime-gpu if you want to do test inference with a GPU.
-pip install torch torchaudio onnxruntime
+pip install torch torchaudio onnxruntime requests beautifulsoup4
 
-mkdir k2_install
-curl -L -o "k2_install/<K2_FILENAME>" "<K2_URL>"
-# Install k2 from the downloaded wheel
-pip install "k2_install/<K2_FILENAME>"
+# Auto-detect OS, Python, and PyTorch versions to fetch and install the compatible k2 wheel.
+python stylish-tts/get_k2_whl.py > k2_whl.txt && pip install -r k2_whl.txt
 
 # Verify that k2 was installed successfully
 python -c "import k2; print('k2 installed successfully')"
-
-# Clone the stylish-tts source somewhere (TODO: Fix this when we upload a package)
-git clone https://github.com/Stylish-TTS/stylish-tts.git
 
 # Install stylish-tts as a local editable package from the stylish-tts/ directory.
 # Automatically rebuilds if contents change.

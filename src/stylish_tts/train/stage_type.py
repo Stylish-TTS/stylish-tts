@@ -287,7 +287,7 @@ def train_alignment(
         loss_ctc,
     )
     train.accelerator.backward(log.backwards_loss())
-    return log.detach(), None, None
+    return log.detach(), None, None, None, None
 
 
 @torch.no_grad()
