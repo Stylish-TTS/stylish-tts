@@ -7,7 +7,6 @@ import torchaudio
 from transformers import AutoModel
 import numpy as np
 
-import k2
 from einops import rearrange
 from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
 from stylish_tts.train.models.discriminator import run_discriminator_model
@@ -172,7 +171,7 @@ class DiscriminatorLoss(torch.nn.Module):
                 "mrd0": DiscriminatorLossHelper(mrd0, 5),  # multi_spectrogram_count),
                 "mrd1": DiscriminatorLossHelper(mrd1, 5),  # multi_spectrogram_count),
                 "mrd2": DiscriminatorLossHelper(mrd2, 5),  # multi_spectrogram_count),
-                "disc": DiscriminatorLossHelper(disc, 5),
+                "disc": DiscriminatorLossHelper(disc, 1),
                 "pitch_disc": DiscriminatorLossHelper(pitch, 5),
                 "dur_disc": DiscriminatorLossHelper(duration, 5),
             }
@@ -527,6 +526,8 @@ class CTCLossWithLabelPriors(nn.Module):
         target_lengths: Tensor,
         step_type="train",
     ) -> Tensor:
+        import k2
+
         supervision_segments, token_ids, indices = self.encode_supervisions(
             targets, target_lengths, input_lengths
         )
