@@ -1,12 +1,13 @@
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 import torch
+from torch import nn
 from torchaudio.models import Conformer
 from torch.nn.utils.parametrizations import weight_norm
 from torch.nn import Conv2d
 from einops import rearrange
 from .common import get_padding
-from positional_encodings.torch_encodings import PositionalEncoding1D
+from torch.nn import functional as F
 
 
 class SpecDiscriminator(torch.nn.Module):
@@ -44,20 +45,27 @@ class SpecDiscriminator(torch.nn.Module):
         )
         self.relu = torch.nn.LeakyReLU(0.1)
 
-        self.out = norm_f(torch.nn.Conv2d(32, 1, 3, 1, 1))
+        self.out = torch.nn.ModuleList(
+            [norm_f(torch.nn.Conv2d(32, 1, 3, 1, 1)) for _ in range(5)]
+        )
 
     def forward(self, y):
 
-        fmap = []
+        # fmap = []
+        result = []
         for i, d in enumerate(self.discriminators):
             y = d(y)
             y = self.relu(y)
-            fmap.append(y)
+            out = self.out[i](y)
+            out = torch.flatten(out, 1, -1)
+            result.append(out)
+            # fmap.append(y)
 
-        y = self.out(y)
-        fmap.append(y)
+        # y = self.out(y)
+        # fmap.append(y)
 
-        return torch.flatten(y, 1, -1), fmap
+        # return [torch.flatten(y, 1, -1)], fmap
+        return result, []
 
 
 def run_discriminator_model(disc, target, pred):
@@ -68,9 +76,11 @@ def run_discriminator_model(disc, target, pred):
 
     y_d_r, fmap_r = disc(target)
     y_d_g, fmap_g = disc(pred)
-    y_d_rs.append(y_d_r)
+    y_d_rs = y_d_r
+    # y_d_rs.append(y_d_r)
     fmap_rs.append(fmap_r)
-    y_d_gs.append(y_d_g)
+    # y_d_gs.append(y_d_g)
+    y_d_gs = y_d_g
     fmap_gs.append(fmap_g)
 
     return y_d_rs, y_d_gs, fmap_rs, fmap_gs
@@ -97,7 +107,6 @@ class ContextFreeBlock(torch.nn.Module):
             ),
             torch.nn.BatchNorm1d(num_features=dim_out),
             torch.nn.GELU(),
-            # torch.nn.Dropout(dropout)
         )
 
     def forward(self, x):
@@ -111,11 +120,13 @@ class ContextFreeDiscriminator(torch.nn.Module):
     ):
         super(ContextFreeDiscriminator, self).__init__()
         dim = 64
-        self.conv = torch.nn.Sequential(
-            ContextFreeBlock(1, dim, kernel=11, stride=4, dropout=0.1),
-            ContextFreeBlock(dim, dim * 2, kernel=11, stride=4, dropout=0.1),
-            ContextFreeBlock(dim * 2, dim * 4, kernel=7, stride=2, dropout=0.1),
-            ContextFreeBlock(dim * 4, dim * 4, kernel=5, stride=2, dropout=0.1),
+        self.conv = torch.nn.ModuleList(
+            [
+                ContextFreeBlock(1, dim, kernel=11, stride=4, dropout=0.1),
+                ContextFreeBlock(dim, dim * 2, kernel=11, stride=4, dropout=0.1),
+                ContextFreeBlock(dim * 2, dim * 4, kernel=7, stride=2, dropout=0.1),
+                ContextFreeBlock(dim * 4, dim * 4, kernel=5, stride=2, dropout=0.1),
+            ]
         )
         self.attn = torch.nn.Sequential(
             torch.nn.AdaptiveAvgPool1d(output_size=1),
@@ -141,52 +152,27 @@ class ContextFreeDiscriminator(torch.nn.Module):
         self.fusion = ContextFreeBlock(
             dim * 4 * 2, dim * 4, kernel=1, stride=1, dropout=0.1, bias=True
         )
-        self.shrink = torch.nn.Linear(dim * 4, dim * 2)
-        self.t_layers = torch.nn.ModuleList(
-            [
-                torch.nn.TransformerEncoderLayer(
-                    d_model=dim * 2,
-                    nhead=8,
-                    dropout=0.0,
-                    batch_first=True,
-                    dim_feedforward=dim * 2 * 4,
-                    norm_first=True,
-                )
-                for _ in range(4)
-            ]
-        )
-        self.pos_encoding = PositionalEncoding1D(dim * 2)
-        self.t_norm = torch.nn.LayerNorm(dim * 2)
-        # self.conformer = Conformer(input_dim=dim*2, num_heads=8, ffn_dim=dim*2*4, num_layers=4, depthwise_conv_kernel_size=3, dropout=0)
-        self.head = torch.nn.Sequential(
-            torch.nn.Linear(dim * 2, dim * 2 * 4),
+        self.last = torch.nn.Sequential(
+            torch.nn.Conv1d(dim * 2 * 2, dim * 2 * 4, 1, 1),
             torch.nn.ReLU(),
-            # torch.nn.Dropout(0.1)
-            torch.nn.Linear(dim * 2 * 4, 1),
+            torch.nn.Conv1d(dim * 2 * 4, 1, 1),
         )
 
     def forward(self, x):
         x = x.unfold(dimension=1, size=1024, step=512)
         time_steps = x.shape[1]
         x = rearrange(x, "b t w -> (b t) 1 w")
-        x = self.conv(x)
+        for conv in self.conv:
+            x = conv(x)
         attn = self.attn(x)
         x = x * attn
         temporal = self.temporal(x)
         spectral = self.spectral(x)
         x = torch.cat([temporal, spectral], dim=1)
         x = self.fusion(x)
-        x = rearrange(x, "b c t -> b t c")
-        x = self.shrink(x)
-        # lengths = torch.full((x.shape[0],), fill_value=x.shape[1], device=x.device)
-        # x, _ = self.conformer(x, lengths)
-        x = x + self.pos_encoding(x)
-        for layer in self.t_layers:
-            x = layer(x)
-        x = self.t_norm(x)
-        x = self.head(x)
-        x = rearrange(x, "(b t) f c -> b (t f c)", t=time_steps)
-        return x, []
+        x = self.last(x)
+        x = rearrange(x, "(b t) c f -> b (t c f)", t=time_steps)
+        return [x], []
 
 
 class DiscriminatorP(torch.nn.Module):

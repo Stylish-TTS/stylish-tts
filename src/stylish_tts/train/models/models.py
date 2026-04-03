@@ -6,7 +6,6 @@ from .text_aligner import tdnn_blstm_ctc_model_base
 from .discriminator import (
     SpecDiscriminator,
     ContextFreeDiscriminator,
-    MultiPeriodDiscriminator,
 )
 
 from .duration_predictor import DurationPredictor

@@ -42,19 +42,27 @@ class PitchDiscriminator(torch.nn.Module):
                 ),
             ]
         )
-        self.out = weight_norm(
-            torch.nn.Conv1d(dim_hidden, 1, kernel_size=kernel, padding=padding)
+        self.out = torch.nn.ModuleList(
+            [
+                weight_norm(
+                    torch.nn.Conv1d(dim_hidden, 1, kernel_size=kernel, padding=padding)
+                )
+                for _ in range(5)
+            ]
         )
 
     def forward(self, y):
         # y = y.unsqueeze(1)
-        fmap = []
+        result = []
         for i, d in enumerate(self.discriminators):
             y = d(y)
             y = F.leaky_relu(y, 0.1)
-            fmap.append(y)
+            out = self.out[i](y)
+            out = torch.flatten(out, 1, -1)
+            result.append(out)
 
-        y = self.out(y)
-        fmap.append(y)
+        # y = self.out(y)
+        # fmap.append(y)
 
-        return torch.flatten(y, 1, -1), fmap
+        # return torch.flatten(y, 1, -1), fmap
+        return result, []

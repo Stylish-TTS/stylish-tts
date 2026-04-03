@@ -44,7 +44,7 @@ class LossLog:
             writer_type = "train"
             lr = stage.optimizer.optimizers["speech_predictor"].param_groups[0]["lr"]
             lr_string = f", lr: {lr:.7f}"
-            disc_lr = stage.optimizer.optimizers["mrd0"].param_groups[0]["lr"]
+            disc_lr = stage.optimizer.optimizers["disc"].param_groups[0]["lr"]
             disc_lr_string = f", disc_lr: {disc_lr:.7f}"
             self.logger.info(
                 f"Epoch [{manifest.current_epoch}/{stage.max_epoch}], "

@@ -75,7 +75,7 @@ loss_weight:
   mel: 5
   # generator loss
   # -- if voice sounds autotuned, try increasing
-  generator: 1
+  generator: 2
   # speech-language model feature matching loss
   slm: 0.2
   # pitch F0 reconstruction loss

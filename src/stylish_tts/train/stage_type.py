@@ -427,18 +427,25 @@ def train_textual(
     train.stage.optimizer.zero_grad()
 
     step.mel_loss()
-    # step.pitch_generator_loss()
+    step.pitch_generator_loss()
     step.pitch_loss()
     step.voiced_loss()
 
     train.accelerator.backward(log.backwards_loss())
+    # return (
+    #     log.detach(),
+    #     None,
+    #     None,
+    #     None,
+    #     None,
+    # )
     return (
         log.detach(),
-        None,
-        None,
-        None,
-        None,
-    )  # detach_all([step.pitchcat]), detach_all([step.pred_pitchcat])
+        detach_all([step.pitchcat]),
+        detach_all([step.pred_pitchcat]),
+        [None],
+        [None],
+    )
 
 
 @torch.no_grad()
@@ -470,8 +477,8 @@ stages["textual"] = StageType(
         "pe_style_encoder",
     ],
     eval_models=["speech_predictor", "speech_style_encoder"],
-    # discriminators=["pitch_disc"],
-    discriminators=[],
+    discriminators=["pitch_disc"],
+    # discriminators=[],
     inputs=[
         "text",
         "text_length",

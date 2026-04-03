@@ -12,6 +12,8 @@ from einops import rearrange
 from stylish_tts.train.multi_spectrogram import multi_spectrogram_count
 from stylish_tts.train.models.discriminator import run_discriminator_model
 
+disc_weight = 3
+
 
 class MultiResolutionSTFTLoss(torch.nn.Module):
     """Multi resolution STFT loss module."""
@@ -44,34 +46,40 @@ def anti_wrapping_loss(phase_diff, weights):
 
 def differential_phase_loss(pred, target, n_fft):
     freq_size = target.shape[1]
-    weights = torch.arange(freq_size).to(pred.device)
+    weights = torch.arange(freq_size, device=pred.device)
     base = math.exp(math.log(2.5) / (freq_size // 2))
     weights = torch.pow(base, weights)
     weights = rearrange(weights, "w -> 1 w 1")
 
     phase_loss = anti_wrapping_loss(pred - target, weights).mean()
 
-    freq_matrix = (
-        torch.triu(torch.ones(freq_size, freq_size), diagonal=1)
-        - torch.triu(torch.ones(freq_size, freq_size), diagonal=2)
-        - torch.eye(freq_size)
-    )
-    freq_matrix = freq_matrix.to(pred.device)
-    pred_freq = torch.matmul(pred.transpose(1, 2), freq_matrix)
-    target_freq = torch.matmul(target.transpose(1, 2), freq_matrix)
-    phase_loss += anti_wrapping_loss(
-        (pred_freq - target_freq).transpose(1, 2), weights
-    ).mean()
+    # freq_matrix = (
+    #     torch.triu(torch.ones(freq_size, freq_size), diagonal=1)
+    #     - torch.triu(torch.ones(freq_size, freq_size), diagonal=2)
+    #     - torch.eye(freq_size)
+    # )
+    # freq_matrix = freq_matrix.to(pred.device)
+    # pred_freq = torch.matmul(pred.transpose(1, 2), freq_matrix)
+    # target_freq = torch.matmul(target.transpose(1, 2), freq_matrix)
+    # phase_loss += anti_wrapping_loss(
+    #     (pred_freq - target_freq).transpose(1, 2), weights
+    # ).mean()
+    pred_freq = torch.diff(pred, dim=1)
+    target_freq = torch.diff(target, dim=1)
+    phase_loss += anti_wrapping_loss(pred_freq - target_freq, weights[:, :-1, :]).mean()
 
-    frames = target.shape[2]
-    time_matrix = (
-        torch.triu(torch.ones(frames, frames), diagonal=1)
-        - torch.triu(torch.ones(frames, frames), diagonal=2)
-        - torch.eye(frames)
-    )
-    time_matrix = time_matrix.to(pred.device)
-    pred_time = torch.matmul(pred, time_matrix)
-    target_time = torch.matmul(target, time_matrix)
+    # frames = target.shape[2]
+    # time_matrix = (
+    #     torch.triu(torch.ones(frames, frames), diagonal=1)
+    #     - torch.triu(torch.ones(frames, frames), diagonal=2)
+    #     - torch.eye(frames)
+    # )
+    # time_matrix = time_matrix.to(pred.device)
+    # pred_time = torch.matmul(pred, time_matrix)
+    # target_time = torch.matmul(target, time_matrix)
+    # phase_loss += anti_wrapping_loss(pred_time - target_time, weights).mean()
+    pred_time = torch.diff(pred, dim=2)
+    target_time = torch.diff(target, dim=2)
     phase_loss += anti_wrapping_loss(pred_time - target_time, weights).mean()
 
     return phase_loss
@@ -161,12 +169,12 @@ class DiscriminatorLoss(torch.nn.Module):
         super(DiscriminatorLoss, self).__init__()
         self.discriminators = torch.nn.ModuleDict(
             {
-                "mrd0": DiscriminatorLossHelper(mrd0, 1),  # multi_spectrogram_count),
-                "mrd1": DiscriminatorLossHelper(mrd1, 1),  # multi_spectrogram_count),
-                "mrd2": DiscriminatorLossHelper(mrd2, 1),  # multi_spectrogram_count),
-                "disc": DiscriminatorLossHelper(disc, 1),
-                "pitch_disc": DiscriminatorLossHelper(pitch, 1),
-                "dur_disc": DiscriminatorLossHelper(duration, 1),
+                "mrd0": DiscriminatorLossHelper(mrd0, 5),  # multi_spectrogram_count),
+                "mrd1": DiscriminatorLossHelper(mrd1, 5),  # multi_spectrogram_count),
+                "mrd2": DiscriminatorLossHelper(mrd2, 5),  # multi_spectrogram_count),
+                "disc": DiscriminatorLossHelper(disc, 5),
+                "pitch_disc": DiscriminatorLossHelper(pitch, 5),
+                "dur_disc": DiscriminatorLossHelper(duration, 5),
             }
         )
         self.disc_list = [
@@ -191,20 +199,12 @@ class DiscriminatorLoss(torch.nn.Module):
                 target=target_list[0], pred=pred_list[0]
             )
         else:
-            # loss = self.disc_list[index](
-            #     target=target_list[index], pred=pred_list[index]
-            # )
             loss = 0
             for i in range(0, 3):
                 loss += self.disc_list[i](target=target_list[i], pred=pred_list[i])
-            loss += 5 * self.discriminators["disc"](
+            loss += disc_weight * self.discriminators["disc"](
                 target=target_audio, pred=pred_audio
             )
-        # loss = 0
-        # for key in used:
-        #     loss += self.discriminators[key](
-        #         target_list=target_list, pred_list=pred_list
-        #     )
         return loss.mean()
 
     def state_dict(self, *args, **kwargs):
@@ -232,16 +232,16 @@ class DiscriminatorLossHelper(torch.nn.Module):
         self.last_loss = 0.5 * sub_count
         self.ideal_loss = 0.5 * sub_count
         self.f_max = 4.0
-        self.h_min = 0.003
+        self.h_min = 0.01
         self.x_max = 0.05 * sub_count
         self.x_min = 0.05 * sub_count
 
     def get_disc_lr_multiplier(self):
         x = abs(self.last_loss - self.ideal_loss)
         result = 1.0
-        if self.last_loss > self.ideal_loss + self.ideal_loss * self.x_max:
+        if self.last_loss > self.ideal_loss + self.x_max:
             result = self.f_max
-        elif self.last_loss < self.ideal_loss - self.ideal_loss * self.x_min:
+        elif self.last_loss < self.ideal_loss - self.x_min:
             result = self.h_min
         elif self.last_loss > self.ideal_loss:
             result = min(math.pow(self.f_max, x / self.x_max), self.f_max)
@@ -319,16 +319,12 @@ class GeneratorLoss(torch.nn.Module):
         elif "dur_disc" in used:
             loss = self.generators["dur_disc"](target=target_list[0], pred=pred_list[0])
         else:
-            # loss = self.gen_list[index](
-            #     target=target_list[index], pred=pred_list[index]
-            # )
             loss = 0
             for i in range(0, 3):
                 loss += self.gen_list[i](target=target_list[i], pred=pred_list[i])
-            loss += 5 * self.generators["disc"](target=target_audio, pred=pred_audio)
-        # loss = 0
-        # for key in used:
-        #     loss += self.generators[key](target_list=target_list, pred_list=pred_list)
+            loss += disc_weight * self.generators["disc"](
+                target=target_audio, pred=pred_audio
+            )
         return loss.mean()
 
 
